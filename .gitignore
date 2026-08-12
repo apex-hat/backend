@@ -39,6 +39,7 @@ out/
 ### Environment / Secrets (README §16) ###
 .env
 .env.*
+!.env.example
 *.key
 firebase-service-account.json
 
