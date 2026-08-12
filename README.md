@@ -28,7 +28,9 @@ Meridian은 글로벌 팀의 협업 과정에서 발생하는 **문화적 표현
    ↓
 AI 문화 맥락 분석
    ↓
-제안 등록
+제안 등록 (DRAFT)
+   ↓
+제안 게시 (OPEN)
    ↓
 팀원 의견 작성
    ↓
@@ -52,7 +54,7 @@ AI 합의 요약
 | Firebase Functions      | REST API 진입점 / API Gateway |
 | Firebase Authentication | 사용자 인증                     |
 | PostgreSQL              | 주요 서비스 데이터 저장              |
-| AI API                  | 문화 맥락 / 의도 / 합의 분석         |
+| AI API                  | 문화 맥락 / 의도 / 합의 분석 (제공자 미확정, 개발 중 선정) |
 
 ## Frontend
 
@@ -72,40 +74,38 @@ AI 합의 요약
 Meridian은 **기존 REST API 구조를 유지하면서 Firebase를 인증 및 API 진입점으로 활용**합니다.
 
 ```text
-                    ┌─────────────────────┐
-                    │      React App       │
-                    │ Vite + TypeScript   │
-                    └──────────┬──────────┘
-                               │
-                               │ REST API
-                               ▼
-                    ┌─────────────────────┐
-                    │   Firebase Auth     │
-                    │   Authentication    │
-                    └──────────┬──────────┘
-                               │
-                         ID Token
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │   Firebase Functions│
-                    │    REST API Entry   │
-                    └──────────┬──────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │     Spring Boot     │
-                    │ Business Logic / API│
-                    └───────┬───────┬─────┘
-                            │       │
-                   ┌────────┘       └─────────┐
-                   ▼                          ▼
-          ┌─────────────────┐        ┌─────────────────┐
-          │   PostgreSQL    │        │     AI API      │
-          │   Application   │        │ Context / Intent│
-          │      Data       │        │   / Consensus  │
-          └─────────────────┘        └─────────────────┘
+     ┌─────────────────────┐   로그인 (SDK)   ┌─────────────────────┐
+     │   Firebase Auth      │◄───────────────►│      React App       │
+     │   (ID Token 발급)     │   ID Token 수신   │  Vite + TypeScript   │
+     └─────────────────────┘                  └──────────┬──────────┘
+                                                          │
+                                              REST API + Authorization:
+                                              Bearer <Firebase ID Token>
+                                                          │
+                                                          ▼
+                                              ┌─────────────────────┐
+                                              │   Firebase Functions│
+                                              │    REST API Entry   │
+                                              └──────────┬──────────┘
+                                                          │
+                                                          ▼
+                                              ┌─────────────────────┐
+                                              │     Spring Boot     │
+                                              │ Business Logic / API│
+                                              │ (Token 검증 + JIT    │
+                                              │  사용자 프로필 동기화) │
+                                              └───────┬───────┬─────┘
+                                                       │       │
+                                              ┌────────┘       └─────────┐
+                                              ▼                          ▼
+                                     ┌─────────────────┐        ┌─────────────────┐
+                                     │   PostgreSQL    │        │     AI API      │
+                                     │   Application   │        │ Context / Intent│
+                                     │      Data       │        │   / Consensus  │
+                                     └─────────────────┘        └─────────────────┘
 ```
+
+> Firebase Auth는 요청 경로의 중간 서버가 아니라 **클라이언트가 로그인 시점에 ID Token을 발급받는 대상**입니다. 이후의 모든 API 요청은 React App이 Firebase Functions로 직접 보내며, 발급받은 ID Token을 `Authorization` 헤더에 담아 전달합니다.
 
 ### Firebase를 사용하는 이유
 
@@ -185,19 +185,42 @@ API 처리
 
 Backend에서는 인증된 사용자의 Firebase UID를 기준으로 사용자 정보를 식별합니다.
 
+> `users.firebase_uid`는 UNIQUE로 관리하고, `users.id`는 Meridian 내부 PK로 사용합니다.
+
+### JIT(Just-In-Time) 사용자 프로필 동기화
+
+`/api/auth/signup` 호출 여부와 무관하게, 인증이 필요한 모든 API는 Token 검증 이후 다음 순서로 동작합니다.
+
+```text
+Firebase ID Token 검증
+      ↓
+firebase_uid로 users 테이블 조회
+      ↓
+존재하지 않으면 Firebase Token Claim(email, name 등)으로
+users row를 자동 생성
+      ↓
+API 로직 수행
+```
+
+이 동작 덕분에 `/api/auth/signup`을 생략하더라도 인증된 사용자는 항상 Postgres에 대응하는 프로필을 가지며, `/api/users/me`, 팀/제안 관련 API가 정상 동작합니다.
+
 ---
 
 # 6. API Specification
 
 ## 6.1 Auth
 
-| 기능   | Method | Endpoint           | 설명      |
-| ---- | ------ | ------------------ | ------- |
-| 회원가입 | POST   | `/api/auth/signup` | 회원가입    |
-| 로그인  | POST   | `/api/auth/login`  | 사용자 로그인 |
-| 로그아웃 | POST   | `/api/auth/logout` | 로그아웃    |
+Meridian의 실제 인증(계정 생성, 로그인, 세션/토큰 발급)은 **Firebase Authentication**이 담당합니다. 클라이언트는 Firebase SDK로 인증한 뒤 발급된 ID Token을 Backend API에 전달합니다.
 
-> Firebase Authentication을 사용하므로 실제 인증 처리는 Firebase Auth가 담당하고, REST API는 서비스 사용자 정보 및 인증 상태와 연계됩니다.
+아래 `/api/auth/*` endpoint는 Firebase Authentication 자체를 대체하는 인증 API가 아니라, 클라이언트 편의를 위한 **선택적 연계 endpoint**입니다. 사용자 프로필의 최초 생성은 [JIT 사용자 프로필 동기화](#jitjust-in-time-사용자-프로필-동기화)를 통해 항상 보장되므로, MVP에서는 Firebase SDK를 직접 사용하고 이 endpoint를 생략할 수 있습니다.
+
+| 기능 | Method | Endpoint | 설명 |
+| --- | --- | --- | --- |
+| 회원가입 연계 | POST | `/api/auth/signup` | Firebase 사용자 생성 후 Meridian 사용자 프로필 생성/동기화 |
+| 로그인 연계 | POST | `/api/auth/login` | 인증된 Firebase 사용자의 Meridian 사용자 상태 확인 |
+| 로그아웃 연계 | POST | `/api/auth/logout` | 애플리케이션 측 로그아웃 상태 처리. 실제 인증 세션 종료는 Firebase SDK가 담당 |
+
+> Backend API의 인증 여부는 보호 endpoint에서 `Authorization: Bearer <Firebase ID Token>`을 검증하는 방식으로 판단합니다.
 
 ---
 
@@ -216,9 +239,16 @@ Authorization: Bearer <Firebase ID Token>
 
 ## 6.3 Team
 
-| 기능      | Method | Endpoint     | 설명              |
-| ------- | ------ | ------------ | --------------- |
-| 팀 목록 조회 | GET    | `/api/teams` | 사용자가 속한 팀 목록 조회 |
+| 기능       | Method | Endpoint                              | 설명                                             |
+| -------- | ------ | -------------------------------------- | ------------------------------------------------ |
+| 팀 생성     | POST   | `/api/teams`                           | 새 팀 생성. 생성 요청자는 자동으로 `role=PM`으로 팀에 추가됨 |
+| 팀 목록 조회  | GET    | `/api/teams`                           | 사용자가 속한 팀 목록 조회                          |
+| 팀 상세 조회  | GET    | `/api/teams/{teamId}`                  | 팀 정보 조회                                     |
+| 팀원 목록 조회 | GET    | `/api/teams/{teamId}/members`          | 팀에 속한 팀원 목록 조회                          |
+| 팀원 추가    | POST   | `/api/teams/{teamId}/members`          | 팀에 사용자 추가 (`userId`, `role`)                |
+| 팀원 제거    | DELETE | `/api/teams/{teamId}/members/{userId}` | 팀에서 사용자 제거                                |
+
+> 팀원 추가/제거는 해당 팀의 `role=PM`인 사용자만 수행할 수 있습니다.
 
 ---
 
@@ -234,6 +264,12 @@ POST /api/proposals
 
 새로운 협업 제안을 등록합니다.
 
+- `teamId`는 사용자가 소속된 팀이어야 합니다.
+- `targetCultures`는 팀의 국가 목록과 동일한 개념이 아니라 AI 문화 맥락 분석의 대상 문화권을 의미합니다. 작성자가 자유롭게 선택하며 팀원의 실제 `country`와 일치할 필요는 없습니다(예: 팀에 없는 이해관계자의 문화권을 참고용으로 추가 가능). Backend는 팀원 국가와의 일치 여부를 검증하지 않습니다.
+- `deadline`은 선택값이며, 지정된 경우 마감 이후 AI 합의 요약을 실행할 수 있습니다.
+- `cultureAnalysisIds`는 선택값이며, 등록 전 `proposalId` 없이 수행한 [문화 맥락 분석](#91-문화-맥락-분석) 결과 ID를 전달하면 해당 분석 이력의 `proposal_id`가 생성된 제안으로 채워집니다.
+- 생성된 제안은 항상 `DRAFT` 상태로 시작하며, 팀원에게 공개되지 않고 작성자만 조회/수정할 수 있습니다. 팀원에게 공개하려면 [제안 게시](#제안-게시) API를 호출해야 합니다.
+
 ### 주요 데이터
 
 ```json
@@ -246,6 +282,7 @@ POST /api/proposals
     "US",
     "IN"
   ],
+  "cultureAnalysisIds": ["analysis-001"],
   "deadline": "2026-08-13T18:00:00Z"
 }
 ```
@@ -278,7 +315,7 @@ GET /api/proposals/{proposalId}
 PUT /api/proposals/{proposalId}
 ```
 
-제안 정보를 수정합니다.
+제안 정보를 수정합니다. `DRAFT` 상태의 제안만 수정할 수 있습니다. 게시 이후에는 내용을 변경할 수 없습니다.
 
 ---
 
@@ -288,7 +325,38 @@ PUT /api/proposals/{proposalId}
 DELETE /api/proposals/{proposalId}
 ```
 
-제안을 삭제합니다.
+제안을 삭제합니다. `DRAFT` 상태의 제안만 삭제할 수 있습니다.
+
+---
+
+## 제안 게시
+
+```http
+POST /api/proposals/{proposalId}/publish
+```
+
+제안을 팀원에게 공개하고 의견 수집을 시작합니다. `DRAFT` 상태의 제안만 게시할 수 있으며, 게시 후 상태는 `OPEN`으로 변경됩니다.
+
+> 이후 팀원이 첫 의견을 등록하면 상태는 시스템에 의해 자동으로 `IN_PROGRESS`로 전환됩니다. 별도의 API 호출은 필요하지 않습니다.
+
+---
+
+## 제안 완료 처리
+
+```http
+POST /api/proposals/{proposalId}/complete
+```
+
+AI 합의 요약을 참고하여 최종 의사결정을 확정하고 제안을 종료합니다. `CONSENSUS_READY` 상태의 제안만 완료 처리할 수 있으며, 처리 후 상태는 `COMPLETED`로 변경됩니다.
+
+### 주요 데이터
+
+```json
+{
+  "decision": "B안을 채택하되, 모바일 UI는 추가 논의 후 반영",
+  "decidedBy": "user-001"
+}
+```
 
 ---
 
@@ -332,7 +400,7 @@ CONDITIONAL_AGREE
 
 ```json
 {
-  "type": "CONDITIONAL_AGREE",
+  "stance": "CONDITIONAL_AGREE",
   "content": "B안에 동의하지만 모바일 화면에서는 추가적인 수정이 필요합니다."
 }
 ```
@@ -352,6 +420,8 @@ POST /api/ai/context-analysis
 ```
 
 제안 내용을 대상 문화권의 관점에서 분석합니다.
+
+> 이 분석은 **제안 최종 등록 전에 수행할 수 있으므로 `proposalId` 없이도 호출 가능**합니다. 제안 등록이 완료되면 해당 분석 이력을 `proposalId`와 연결할 수 있습니다.
 
 ### 분석 결과
 
@@ -389,6 +459,16 @@ POST /api/ai/consensus-summary
 ```
 
 제안 내용과 팀원들의 의견을 분석하여 합의 상태와 핵심 쟁점을 제공합니다.
+
+"대상 팀원"은 제안의 `targetTeamId`에 소속된 전체 팀원을 의미합니다.
+
+실행 조건은 다음과 같습니다.
+- 모든 대상 팀원의 의견이 제출되었거나
+- 설정된 `deadline`이 경과한 경우
+
+응답 인원이 부족하여 요약을 실행할 수 없는 경우에는 도메인 오류로 응답합니다.
+
+> 이 조건은 별도의 배치/스케줄러 없이 **API 호출 시점에 검사**합니다. 조건을 만족하면 Proposal 상태를 `CONSENSUS_READY`로 갱신한 뒤 합의 요약을 생성합니다. 이미 `CONSENSUS_READY` 이상인 제안에 대해 다시 호출하면 새로운 합의 요약 이력을 추가로 생성합니다(최신 이력이 현재 합의 요약으로 사용됨).
 
 ### 분석 결과
 
@@ -451,10 +531,10 @@ AI 결과는 의사결정을 대신하는 것이 아니라 **의견 해석을 �
 ## 시간대 조회
 
 ```http
-GET /api/dashboard/timezones
+GET /api/dashboard/timezones?teamId={teamId}
 ```
 
-팀원의 글로벌 시간대 정보를 조회합니다.
+`teamId`에 속한 팀원의 글로벌 시간대 정보를 조회합니다. `teamId`는 필수 쿼리 파라미터이며, 요청 사용자가 해당 팀에 속하지 않은 경우 `403`을 반환합니다.
 
 ### 제공 정보
 
@@ -493,10 +573,10 @@ GET /api/dashboard/timezones
 ## 응답 현황 조회
 
 ```http
-GET /api/dashboard/status
+GET /api/dashboard/status?proposalId={proposalId}
 ```
 
-제안별 팀원 응답 현황을 조회합니다.
+`proposalId`에 해당하는 제안의 팀원 응답 현황을 조회합니다. `proposalId`는 필수 쿼리 파라미터입니다.
 
 예:
 
@@ -539,7 +619,9 @@ DEADLINE_APPROACHING
 CONSENSUS_SUMMARY_COMPLETED
 ```
 
-동일 이벤트에 대한 중복 알림은 방지합니다.
+> `notifications.type`도 위 값을 그대로 사용합니다.
+
+동일 이벤트에 대한 중복 알림은 방지합니다. `PROPOSAL_CREATED`, `OPINION_REQUESTED`, `CONSENSUS_SUMMARY_COMPLETED`처럼 사용자-제안 조합당 한 번만 발생해야 하는 이벤트는 알림 생성 전 `(user_id, proposal_id, type)` 조합으로 기존 알림 존재 여부를 확인해 중복 생성을 막습니다. `DEADLINE_APPROACHING`처럼 반복 발생이 정상인 이벤트는 대상에서 제외하고 발송 이력(예: 최근 발송 시각)을 기준으로 재발송 여부를 판단합니다.
 
 ---
 
@@ -551,12 +633,19 @@ CONSENSUS_SUMMARY_COMPLETED
 | Auth         | POST   | `/api/auth/signup`                     | 회원가입        |
 | Auth         | POST   | `/api/auth/logout`                     | 로그아웃        |
 | User         | GET    | `/api/users/me`                        | 사용자 정보 조회   |
+| Team         | POST   | `/api/teams`                           | 팀 생성        |
 | Team         | GET    | `/api/teams`                           | 팀 목록 조회     |
+| Team         | GET    | `/api/teams/{teamId}`                  | 팀 상세 조회     |
+| Team         | GET    | `/api/teams/{teamId}/members`          | 팀원 목록 조회    |
+| Team         | POST   | `/api/teams/{teamId}/members`          | 팀원 추가       |
+| Team         | DELETE | `/api/teams/{teamId}/members/{userId}` | 팀원 제거       |
 | Proposal     | POST   | `/api/proposals`                       | 제안 생성       |
 | Proposal     | GET    | `/api/proposals`                       | 제안 목록 조회    |
 | Proposal     | GET    | `/api/proposals/{proposalId}`          | 제안 상세 조회    |
 | Proposal     | PUT    | `/api/proposals/{proposalId}`          | 제안 수정       |
 | Proposal     | DELETE | `/api/proposals/{proposalId}`          | 제안 삭제       |
+| Proposal     | POST   | `/api/proposals/{proposalId}/publish`  | 제안 게시 (DRAFT → OPEN) |
+| Proposal     | POST   | `/api/proposals/{proposalId}/complete` | 제안 완료 처리 (CONSENSUS_READY → COMPLETED) |
 | AI           | POST   | `/api/ai/context-analysis`             | 문화 맥락 분석    |
 | AI           | POST   | `/api/ai/consensus-summary`            | AI 합의 요약    |
 | AI           | POST   | `/api/ai/intent-analysis`              | 숨은 의도 분석    |
@@ -564,8 +653,8 @@ CONSENSUS_SUMMARY_COMPLETED
 | Opinion      | GET    | `/api/proposals/{proposalId}/opinions` | 의견 조회       |
 | Opinion      | PUT    | `/api/opinions/{opinionId}`            | 의견 수정       |
 | Opinion      | DELETE | `/api/opinions/{opinionId}`            | 의견 삭제       |
-| Dashboard    | GET    | `/api/dashboard/timezones`             | 팀원 시간대 조회   |
-| Dashboard    | GET    | `/api/dashboard/status`                | 응답 현황 조회    |
+| Dashboard    | GET    | `/api/dashboard/timezones?teamId={teamId}` | 팀원 시간대 조회 |
+| Dashboard    | GET    | `/api/dashboard/status?proposalId={proposalId}` | 응답 현황 조회 |
 | Notification | GET    | `/api/notifications`                   | 알림 목록 조회    |
 | Notification | PATCH  | `/api/notifications/{notificationId}`  | 알림 읽음 처리    |
 
@@ -573,30 +662,31 @@ CONSENSUS_SUMMARY_COMPLETED
 
 # 13. Data Model
 
-핵심 데이터 구조는 다음과 같습니다.
+Meridian의 핵심 데이터 구조는 다음과 같습니다.
 
 ```text
 User
- ├── Team Membership
- └── Opinion
+ ├── Team Membership ──> Team
+ ├── Proposal (author)
+ ├── Opinion
+ └── Notification
 
 Team
- ├── Members
- └── Proposals
+ ├── Team Members
+ └── Proposal
 
 Proposal
- ├── Team
- ├── Author
+ ├── Author (User)
+ ├── Target Team (Team)
+ ├── Target Cultures
+ ├── Culture Analyses
  ├── Opinions
- ├── AI Context Analysis
- └── AI Consensus Summary
+ ├── Consensus Summaries
+ └── Notifications
 
 Opinion
  ├── User
  └── Proposal
-
-Notification
- └── User
 ```
 
 ### 주요 Entity
@@ -605,39 +695,61 @@ Notification
 
 ```text
 id
-firebaseUid
+firebaseUid      # Firebase Authentication 사용자 식별자 (UNIQUE)
 name
 email
-country
-timeZone
-location
+country         # 선택
+timeZone        # 선택, 기본값 UTC (JIT 생성 시 Firebase Token Claim에 없으면 UTC로 설정)
+location        # 선택
+cultureTag      # 선택
 createdAt
 updatedAt
 ```
+
+> 비밀번호는 PostgreSQL `users` 테이블에 저장하지 않습니다. 인증 정보는 Firebase Authentication이 관리하고, Backend DB에는 Firebase UID와 서비스 프로필 정보만 저장합니다.
 
 #### Team
 
 ```text
 id
 name
+country         # 선택: 팀의 대표/운영 국가
+cultureTag      # 선택
 createdAt
 updatedAt
 ```
+
+#### TeamMember
+
+```text
+teamId
+userId
+role
+joinedAt
+```
+
+`teamId + userId`를 복합 PK로 사용합니다.
 
 #### Proposal
 
 ```text
 id
-teamId
-authorId
 title
 content
-targetCultures
-deadline
+authorId
+targetTeamId
 status
+deadline        # 선택
+decision        # 선택: 완료 처리 시 입력된 최종 의사결정 내용
+decidedBy       # 선택: 완료 처리한 사용자 ID
+completedAt     # 선택: 완료 처리 일시
 createdAt
 updatedAt
 ```
+
+대상 문화권은 `proposal_target_cultures`로 분리하여 여러 문화권을 저장합니다.
+
+`decision`, `decidedBy`, `completedAt`은 `POST /api/proposals/{proposalId}/complete` 호출 시 채워집니다.
 
 #### Opinion
 
@@ -645,17 +757,21 @@ updatedAt
 id
 proposalId
 userId
-type
-content
+stance
+comment
+attachmentUrl   # 선택
 createdAt
 updatedAt
 ```
+
+`proposalId + userId` UNIQUE 제약으로 동일 사용자의 동일 제안 중복 의견을 방지합니다.
 
 #### Notification
 
 ```text
 id
 userId
+proposalId      # 선택
 type
 title
 content
@@ -663,11 +779,235 @@ isRead
 createdAt
 ```
 
----
+### 13.1 ERD
+
+아래 ERD는 현재 API/기능 명세와 일치하도록 정리한 논리 모델입니다.
+
+#### 1) Users (사용자)
+
+**설명**
+
+서비스 사용자와 Firebase Authentication 연계 정보를 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 사용자 고유 ID (PK) |
+| `firebase_uid` | Firebase Authentication 사용자 ID (UNIQUE, NOT NULL) |
+| `name` | 사용자 이름 |
+| `email` | 이메일 (UNIQUE) |
+| `country` | 소속/대표 국가 (선택) |
+| `timezone` | 타임존 (예: `Asia/Seoul`, 선택, 기본값 `UTC`) |
+| `location` | 위치 정보 (선택) |
+| `culture_tag` | 문화권/커뮤니케이션 스타일 태그 (선택) |
+| `created_at` | 가입/생성 일시 |
+| `updated_at` | 수정 일시 |
+
+**관계**
+
+- `Users` : `Teams` = N:M (`team_members` 경유)
+- `Users` : `Proposals` = 1:N (작성자)
+- `Users` : `Opinions` = 1:N
+- `Users` : `Notifications` = 1:N
+
+> 비밀번호는 이 테이블에 저장하지 않습니다. 실제 인증 정보는 Firebase Authentication이 관리합니다.
+
+#### 2) Teams (팀)
+
+**설명**
+
+글로벌 협업의 기본 단위를 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 팀 고유 ID (PK) |
+| `name` | 팀명 |
+| `country` | 팀의 대표/운영 국가 (선택) |
+| `culture_tag` | 팀의 대표 문화/커뮤니케이션 스타일 태그 (선택) |
+| `created_at` | 생성 일시 |
+| `updated_at` | 수정 일시 |
+
+**관계**
+
+- `Teams` : `Users` = N:M (`team_members` 경유)
+- `Teams` : `Proposals` = 1:N
+
+> 팀은 여러 국가의 사용자를 포함할 수 있으므로 팀의 `country`와 사용자 개별 `country/timezone`은 별도 정보로 취급합니다.
+
+#### 3) Team_Members (팀 멤버)
+
+**설명**
+
+사용자와 팀의 소속 관계를 저장하는 조인 테이블입니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `team_id` | 팀 ID (PK, FK) |
+| `user_id` | 사용자 ID (PK, FK) |
+| `role` | 팀 내 역할 (예: `PM`, `MEMBER`) |
+| `joined_at` | 팀 가입 일시 |
+
+**제약**
+
+- PK: (`team_id`, `user_id`)
+- 동일 사용자의 동일 팀 중복 소속 금지
+
+> 팀 생성 시 생성자는 `role=PM`으로 자동 등록되며, 이후 팀원 추가/제거는 [Team API](#63-team)의 `POST/DELETE /api/teams/{teamId}/members` 로 관리합니다.
+
+#### 4) Proposals (제안)
+
+**설명**
+
+팀원에게 공유되는 협업 제안/안건을 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 제안 고유 ID (PK) |
+| `title` | 제안 제목 |
+| `content` | 제안 내용 |
+| `author_id` | 작성자 ID (FK → `users.id`) |
+| `target_team_id` | 대상 팀 ID (FK → `teams.id`) |
+| `status` | `DRAFT/OPEN/IN_PROGRESS/CONSENSUS_READY/COMPLETED` |
+| `deadline` | 응답 마감 기한 (선택) |
+| `decision` | 완료 처리 시 입력된 최종 의사결정 내용 (선택) |
+| `decided_by` | 완료 처리한 사용자 ID (FK → `users.id`, 선택) |
+| `completed_at` | 완료 처리 일시 (선택) |
+| `created_at` | 작성/생성 일시 |
+| `updated_at` | 수정 일시 |
+
+**관계**
+
+- 하나의 제안은 하나의 작성자(User)를 가집니다. (N:1)
+- 하나의 제안은 하나의 대상 팀(Team)을 가집니다. (N:1)
+- 하나의 제안은 여러 대상 문화권을 가질 수 있습니다. (1:N)
+- 하나의 제안은 여러 의견을 가집니다. (1:N)
+- 하나의 제안은 여러 문화 맥락 분석 결과를 가질 수 있습니다. (1:N)
+- 하나의 제안은 여러 AI 합의 요약 결과를 가질 수 있습니다. (1:N)
+
+#### 5) Proposal_Target_Cultures (제안 대상 문화권)
+
+**설명**
+
+제안이 전달/검토될 대상 문화권 목록을 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 고유 ID (PK) |
+| `proposal_id` | 제안 ID (FK → `proposals.id`) |
+| `culture_name` | 문화권 코드/명 (예: `KR`, `US`, `IN`, `BR`) |
+
+**제약**
+
+- (`proposal_id`, `culture_name`) UNIQUE
+
+#### 6) Culture_Analyses (AI 문화 맥락 분석)
+
+**설명**
+
+제안의 문화적 오해 가능성을 분석한 결과를 저장합니다. 제안 등록 전 분석이 가능하므로 `proposal_id`는 분석 시점에 없을 수 있습니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 고유 ID (PK) |
+| `proposal_id` | 제안 ID (FK, NULL 허용) |
+| `original_text` | 분석 대상 원문 |
+| `risk_level` | `LOW/MEDIUM/HIGH` |
+| `interpretation` | 문화권별 해석 결과 (JSON/JSONB 권장) |
+| `flagged_phrase` | 오해 가능 표현 (JSON/JSONB 권장) |
+| `suggested_rewrite` | AI 수정 제안 |
+| `applied` | 해당 수정안이 최종 제안에 적용되었는지 여부 |
+| `created_at` | 분석 일시 |
+
+**관계**
+
+- 하나의 제안은 여러 분석 이력을 가질 수 있습니다. (1:N)
+- 등록 전 분석은 `proposal_id = NULL`일 수 있으며, `POST /api/proposals` 호출 시 `cultureAnalysisIds`로 전달하면 `proposal_id`가 채워집니다.
+
+#### 7) Opinions (의견)
+
+**설명**
+
+팀원이 제안에 대해 남기는 비동기 의견을 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 의견 고유 ID (PK) |
+| `proposal_id` | 제안 ID (FK → `proposals.id`) |
+| `user_id` | 작성자 ID (FK → `users.id`) |
+| `stance` | `AGREE/DISAGREE/CONDITIONAL_AGREE` |
+| `comment` | 의견 내용 |
+| `attachment_url` | 첨부 파일 URL (선택) |
+| `created_at` | 작성 일시 |
+| `updated_at` | 수정 일시 |
+
+**제약**
+
+- (`proposal_id`, `user_id`) UNIQUE
+- 의견 유형과 코멘트를 하나의 최종 의견 레코드로 관리합니다.
+
+#### 8) Consensus_Summaries (AI 합의 요약)
+
+**설명**
+
+수집된 의견을 AI가 분석하여 합의 상태와 핵심 쟁점을 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 고유 ID (PK) |
+| `proposal_id` | 제안 ID (FK → `proposals.id`) |
+| `consensus_status` | `AGREED/PARTIAL/DISAGREED/PENDING` |
+| `summary` | 전체 요약 |
+| `key_issues` | 핵심 쟁점 (JSON/JSONB) |
+| `cultural_analysis` | 문화적 표현 분석 (JSON/JSONB) |
+| `hidden_opposition` | 숨은 반대/우려 분석 (JSON/JSONB) |
+| `recommended_actions` | 권장 후속 조치 |
+| `created_at` | 생성 일시 |
+
+**관계**
+
+- 하나의 제안은 여러 합의 요약 이력을 가질 수 있습니다. (1:N)
+- 최신 `created_at` 결과를 현재 합의 요약으로 사용할 수 있습니다.
+
+#### 9) Notifications (알림)
+
+**설명**
+
+사용자에게 전달된 협업 관련 알림을 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 알림 고유 ID (PK) |
+| `user_id` | 수신자 ID (FK → `users.id`) |
+| `proposal_id` | 관련 제안 ID (FK, nullable) |
+| `type` | `PROPOSAL_CREATED/OPINION_REQUESTED/DEADLINE_APPROACHING/CONSENSUS_SUMMARY_COMPLETED` |
+| `title` | 알림 제목 |
+| `content` | 알림 내용 |
+| `is_read` | 읽음 여부 |
+| `created_at` | 발송/생성 일시 |
+
+**관계**
+
+- 여러 알림은 하나의 사용자에게 속합니다. (N:1)
+- 알림은 특정 제안과 연결될 수 있습니다. (N:1, nullable)
+
+### ERD 관계 요약
+
+```text
+Users
+  │
+  ├──< Team_Members >── Teams
+  │                       │
+  │                       └──< Proposals
+  │                              ├──< Proposal_Target_Cultures
+  │                              ├──< Culture_Analyses
+  │                              ├──< Opinions >── Users
+  │                              └──< Consensus_Summaries
+  │
+  └──< Notifications >── Proposals (nullable)
+```
 
 # 14. Proposal Status
 
-제안의 진행 상태는 다음과 같이 관리합니다.
+제안의 진행 상태는 아래 값만 사용합니다.
 
 ```text
 DRAFT
@@ -683,15 +1023,19 @@ COMPLETED
 
 ### 상태 설명
 
-| Status            | 설명          |
-| ----------------- | ----------- |
-| `DRAFT`           | 작성 중인 제안    |
-| `OPEN`            | 의견 수집 시작    |
-| `IN_PROGRESS`     | 팀원의 의견 수집 중 |
-| `CONSENSUS_READY` | AI 합의 요약 가능 |
-| `COMPLETED`       | 의사결정 완료     |
+| Status | 설명 | 전이 방법 |
+| --- | --- | --- |
+| `DRAFT` | 작성 중이며 아직 의견 수집을 시작하지 않은 제안 | `POST /api/proposals` 호출 시 초기값 |
+| `OPEN` | 의견 수집이 시작된 제안 | `POST /api/proposals/{proposalId}/publish` |
+| `IN_PROGRESS` | 하나 이상의 응답을 수집하고 있는 상태 | 팀원이 첫 의견 등록 시 시스템이 자동 전이 |
+| `CONSENSUS_READY` | 모든 팀원 응답이 완료되었거나 마감 기한이 지나 AI 합의 요약을 실행할 수 있는 상태 | `POST /api/ai/consensus-summary` 호출 시 조건 충족되면 시스템이 자동 전이 |
+| `COMPLETED` | 최종 의사결정이 완료된 상태 | `POST /api/proposals/{proposalId}/complete` |
 
----
+> `REVIEWING`, `CONSENSUS_DONE`, `CLOSED` 등은 사용하지 않습니다. 초안 검토가 필요하더라도 별도의 상태값으로 확장하지 않고 `DRAFT` 내부 단계로 관리합니다.
+>
+> `DRAFT`, `COMPLETED`를 제외한 모든 상태 전이는 사용자의 명시적 API 호출 없이 시스템이 자동으로 처리하며, 별도의 배치/스케줄러 없이 관련 API(의견 등록, 합의 요약) 호출 시점에 조건을 검사합니다.
+>
+> 의견이 하나도 제출되지 않은 채 `deadline`이 경과한 경우, `IN_PROGRESS`를 거치지 않고 `OPEN`에서 바로 `CONSENSUS_READY`로 전이될 수 있습니다.
 
 # 15. Error Response
 
@@ -838,15 +1182,24 @@ Firebase Functions는 외부 요청을 받아 Spring Backend API로 전달하는
 ```text
 Firebase Auth
     ↓
-/api/auth/*
+Token 검증 + JIT 사용자 프로필 동기화
     ↓
 /api/users/me
+    ↓
+(선택) /api/auth/*
 ```
+
+> `/api/auth/*`는 선택 endpoint이므로 JIT 프로필 동기화 구현 이후 필요 시 추가합니다.
 
 ### Phase 2 — Team
 
 ```text
-/api/teams
+POST   /api/teams
+GET    /api/teams
+GET    /api/teams/{teamId}
+GET    /api/teams/{teamId}/members
+POST   /api/teams/{teamId}/members
+DELETE /api/teams/{teamId}/members/{userId}
 ```
 
 ### Phase 3 — Proposal
@@ -857,6 +1210,7 @@ GET    /api/proposals
 GET    /api/proposals/{proposalId}
 PUT    /api/proposals/{proposalId}
 DELETE /api/proposals/{proposalId}
+POST   /api/proposals/{proposalId}/publish
 ```
 
 ### Phase 4 — Opinion
@@ -874,13 +1228,15 @@ DELETE /api/opinions/{opinionId}
 POST /api/ai/context-analysis
 POST /api/ai/intent-analysis
 POST /api/ai/consensus-summary
+    ↓
+POST /api/proposals/{proposalId}/complete
 ```
 
 ### Phase 6 — Dashboard
 
 ```text
-GET /api/dashboard/timezones
-GET /api/dashboard/status
+GET /api/dashboard/timezones?teamId={teamId}
+GET /api/dashboard/status?proposalId={proposalId}
 ```
 
 ### Phase 7 — Notification
@@ -898,13 +1254,14 @@ PATCH /api/notifications/{notificationId}
 
 ### P0 — 반드시 구현
 
-* Firebase Authentication
+* Firebase Authentication (+ JIT 사용자 프로필 동기화)
 * 사용자 정보
-* 팀 조회
-* 제안 생성 / 조회
+* 팀 생성 / 조회 / 팀원 관리
+* 제안 생성 / 조회 / 게시
 * 의견 등록 / 조회
 * AI 문화 맥락 분석
 * AI 합의 요약
+* 제안 완료 처리(최종 의사결정)
 
 ### P1 — 데모 완성도 향상
 
@@ -955,7 +1312,11 @@ Meridian의 핵심 데모 시나리오는 다음과 같습니다.
 
         ↓
 
-[제안 등록]
+[제안 등록 (DRAFT)]
+
+        ↓
+
+[제안 게시 (OPEN)]
 
         ↓
 

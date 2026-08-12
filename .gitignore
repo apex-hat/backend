@@ -35,3 +35,19 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### Environment / Secrets (README §16) ###
+.env
+.env.*
+*.key
+firebase-service-account.json
+
+### Firebase Functions ###
+functions/node_modules/
+functions/lib/
+.firebase/
+
+### AI ###
+.claude/
+CLAUDE.md
+AGENTS.md

@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: meridian
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/meridian}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+server:
+  port: 8080
+
+firebase:
+  project-id: ${FIREBASE_PROJECT_ID:}
+  client-email: ${FIREBASE_CLIENT_EMAIL:}
+  private-key: ${FIREBASE_PRIVATE_KEY:}
+
+ai:
+  api-key: ${AI_API_KEY:}
