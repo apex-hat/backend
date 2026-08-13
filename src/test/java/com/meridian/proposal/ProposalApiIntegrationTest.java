@@ -52,6 +52,8 @@ class ProposalApiIntegrationTest {
     private TeamRepository teamRepository;
     @Autowired
     private TeamMemberRepository teamMemberRepository;
+    @Autowired
+    private ProposalRepository proposalRepository;
 
     private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
     private MockMvc mockMvc;
@@ -98,10 +100,10 @@ class ProposalApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.title").value("디자인 시안 B 적용"));
 
-        // 같은 팀원이지만 DRAFT 상태라 조회 불가
+        // 같은 팀원이지만 DRAFT 상태라 존재 자체가 노출되지 않음 (404)
         mockMvc.perform(get("/api/proposals/" + proposalId).header(HttpHeaders.AUTHORIZATION, "Bearer member-token"))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error.code").value("PROPOSAL_ACCESS_DENIED"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PROPOSAL_NOT_FOUND"));
 
         // 작성자 목록 조회에는 노출됨
         mockMvc.perform(get("/api/proposals").header(HttpHeaders.AUTHORIZATION, "Bearer author-token"))
@@ -142,7 +144,7 @@ class ProposalApiIntegrationTest {
     }
 
     @Test
-    void nonAuthorCannotUpdateOrDeleteEvenAsTeamMember() throws Exception {
+    void nonAuthorTeamMemberCannotSeeOrTouchDraftProposal() throws Exception {
         ProposalCreateRequest createRequest = new ProposalCreateRequest(
                 "제목", "내용", team.getId(), List.of(), List.of(), null);
         String body = mockMvc.perform(post("/api/proposals")
@@ -152,15 +154,66 @@ class ProposalApiIntegrationTest {
                 .andReturn().getResponse().getContentAsString();
         Long proposalId = objectMapper.readTree(body).get("id").asLong();
 
+        // DRAFT는 팀원에게도 존재를 숨기므로 수정/삭제 시도 역시 404
         ProposalUpdateRequest updateRequest = new ProposalUpdateRequest("변경", "변경 내용", List.of(), null);
         mockMvc.perform(put("/api/proposals/" + proposalId)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer member-token")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(updateRequest)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isNotFound());
 
         mockMvc.perform(delete("/api/proposals/" + proposalId).header(HttpHeaders.AUTHORIZATION, "Bearer member-token"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void nonAuthorTeamMemberCannotUpdateOrDeletePublishedProposal() throws Exception {
+        // publish API는 별도 담당 범위라, 게시된 상태를 리포지토리로 직접 세팅해 시나리오를 재현한다.
+        User author = userRepository.findByFirebaseUid("author-uid").orElseThrow();
+        Proposal published = proposalRepository.save(Proposal.builder()
+                .title("게시된 제안")
+                .content("내용")
+                .author(author)
+                .targetTeam(team)
+                .status(ProposalStatus.OPEN)
+                .build());
+
+        ProposalUpdateRequest updateRequest = new ProposalUpdateRequest("변경", "변경 내용", List.of(), null);
+        mockMvc.perform(put("/api/proposals/" + published.getId())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer member-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("PROPOSAL_ACCESS_DENIED"));
+
+        mockMvc.perform(delete("/api/proposals/" + published.getId()).header(HttpHeaders.AUTHORIZATION, "Bearer member-token"))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void rejectsDuplicateTargetCulturesWithClearBadRequest() throws Exception {
+        ProposalCreateRequest createRequest = new ProposalCreateRequest(
+                "제목", "내용", team.getId(), List.of("KR", "KR"), List.of(), null);
+
+        mockMvc.perform(post("/api/proposals")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer author-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("DUPLICATE_TARGET_CULTURE"));
+    }
+
+    @Test
+    void rejectsBlankTitleWithValidationError() throws Exception {
+        ProposalCreateRequest createRequest = new ProposalCreateRequest(
+                "  ", "내용", team.getId(), List.of(), List.of(), null);
+
+        mockMvc.perform(post("/api/proposals")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer author-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
     }
 
     private void stubToken(String token, String uid, String email) {

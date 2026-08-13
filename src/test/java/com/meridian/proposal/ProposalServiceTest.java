@@ -132,7 +132,9 @@ class ProposalServiceTest {
         when(teamMemberRepository.existsByTeam_IdAndUser_Id(10L, 2L)).thenReturn(false);
 
         assertThatThrownBy(() -> proposalService.getProposal(AUTH_HEADER, 100L))
-                .isInstanceOf(DomainException.class);
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("PROPOSAL_NOT_FOUND");
     }
 
     @Test
@@ -147,19 +149,53 @@ class ProposalServiceTest {
         when(teamMemberRepository.existsByTeam_IdAndUser_Id(10L, 2L)).thenReturn(true);
 
         assertThatThrownBy(() -> proposalService.getProposal(AUTH_HEADER, 100L))
-                .isInstanceOf(DomainException.class);
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("PROPOSAL_NOT_FOUND");
     }
 
     @Test
-    void updateProposalRejectsNonAuthor() {
+    void updateProposalRejectsInvisibleDraftAsNotFound() {
         Proposal proposal = draftProposal();
         proposal.setAuthor(User.builder().id(999L).build());
         when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+        when(teamMemberRepository.existsByTeam_IdAndUser_Id(10L, 1L)).thenReturn(false);
 
         ProposalUpdateRequest request = new ProposalUpdateRequest("New", "New content", List.of(), null);
 
         assertThatThrownBy(() -> proposalService.updateProposal(AUTH_HEADER, 100L, request))
-                .isInstanceOf(DomainException.class);
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("PROPOSAL_NOT_FOUND");
+    }
+
+    @Test
+    void updateProposalRejectsVisibleNonAuthorAsForbidden() {
+        Proposal proposal = draftProposal();
+        proposal.setAuthor(User.builder().id(999L).build());
+        proposal.setStatus(ProposalStatus.OPEN);
+        when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+        when(teamMemberRepository.existsByTeam_IdAndUser_Id(10L, 1L)).thenReturn(true);
+
+        ProposalUpdateRequest request = new ProposalUpdateRequest("New", "New content", List.of(), null);
+
+        assertThatThrownBy(() -> proposalService.updateProposal(AUTH_HEADER, 100L, request))
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("PROPOSAL_ACCESS_DENIED");
+    }
+
+    @Test
+    void createProposalRejectsDuplicateTargetCultures() {
+        ProposalCreateRequest request = new ProposalCreateRequest("Title", "Content", 10L, List.of("KR", "KR"), List.of(), null);
+
+        when(teamRepository.findById(10L)).thenReturn(Optional.of(team));
+        when(teamMemberRepository.existsByTeam_IdAndUser_Id(10L, 1L)).thenReturn(true);
+
+        assertThatThrownBy(() -> proposalService.createProposal(AUTH_HEADER, request))
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("DUPLICATE_TARGET_CULTURE");
     }
 
     @Test

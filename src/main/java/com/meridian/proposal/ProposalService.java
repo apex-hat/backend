@@ -54,6 +54,7 @@ public class ProposalService {
         if (!teamMemberRepository.existsByTeam_IdAndUser_Id(team.getId(), author.getId())) {
             throw DomainException.forbidden("TEAM_ACCESS_DENIED", "해당 팀에 소속된 사용자만 제안을 생성할 수 있습니다.");
         }
+        assertNoDuplicateCultures(request.targetCultures());
 
         Proposal proposal = Proposal.builder()
                 .title(request.title())
@@ -91,7 +92,7 @@ public class ProposalService {
         User user = resolveCurrentUser(authorizationHeader);
         Proposal proposal = findProposal(proposalId);
 
-        assertReadable(proposal, user);
+        assertVisible(proposal, user);
 
         return ProposalResponse.from(proposal, targetCulturesOf(proposal));
     }
@@ -101,8 +102,10 @@ public class ProposalService {
         User user = resolveCurrentUser(authorizationHeader);
         Proposal proposal = findProposal(proposalId);
 
+        assertVisible(proposal, user);
         assertAuthor(proposal, user);
         assertDraft(proposal);
+        assertNoDuplicateCultures(request.targetCultures());
 
         if (!StringUtils.hasText(request.title()) || !StringUtils.hasText(request.content())) {
             throw DomainException.badRequest("INVALID_PROPOSAL", "title과 content는 필수입니다.");
@@ -126,6 +129,7 @@ public class ProposalService {
         User user = resolveCurrentUser(authorizationHeader);
         Proposal proposal = findProposal(proposalId);
 
+        assertVisible(proposal, user);
         assertAuthor(proposal, user);
         assertDraft(proposal);
 
@@ -140,17 +144,22 @@ public class ProposalService {
                 .orElseThrow(() -> DomainException.notFound("PROPOSAL_NOT_FOUND", "Proposal not found."));
     }
 
-    private void assertReadable(Proposal proposal, User user) {
+    /**
+     * DRAFT 제안은 팀원에게도 존재 자체를 노출하지 않는다(README §7).
+     * 작성자가 아니면서 팀원도 아니거나, 팀원이어도 아직 DRAFT면 404로 응답해 리소스 존재 여부를 숨긴다.
+     */
+    private void assertVisible(Proposal proposal, User user) {
         boolean isAuthor = proposal.getAuthor().getId().equals(user.getId());
         if (isAuthor) {
             return;
         }
         boolean isTeamMember = teamMemberRepository.existsByTeam_IdAndUser_Id(proposal.getTargetTeam().getId(), user.getId());
         if (!isTeamMember || proposal.getStatus() == ProposalStatus.DRAFT) {
-            throw DomainException.forbidden("PROPOSAL_ACCESS_DENIED", "해당 제안을 조회할 권한이 없습니다.");
+            throw DomainException.notFound("PROPOSAL_NOT_FOUND", "Proposal not found.");
         }
     }
 
+    /** 조회 가능(assertVisible 통과)하지만 작성자가 아닌 경우에만 도달 — 존재는 알려졌으므로 403. */
     private void assertAuthor(Proposal proposal, User user) {
         if (!proposal.getAuthor().getId().equals(user.getId())) {
             throw DomainException.forbidden("PROPOSAL_ACCESS_DENIED", "작성자만 수행할 수 있는 작업입니다.");
@@ -160,6 +169,16 @@ public class ProposalService {
     private void assertDraft(Proposal proposal) {
         if (proposal.getStatus() != ProposalStatus.DRAFT) {
             throw DomainException.conflict("PROPOSAL_NOT_EDITABLE", "DRAFT 상태의 제안만 수정/삭제할 수 있습니다.");
+        }
+    }
+
+    private void assertNoDuplicateCultures(List<String> cultureNames) {
+        if (cultureNames == null || cultureNames.isEmpty()) {
+            return;
+        }
+        long distinctCount = cultureNames.stream().distinct().count();
+        if (distinctCount != cultureNames.size()) {
+            throw DomainException.badRequest("DUPLICATE_TARGET_CULTURE", "targetCultures에 중복된 문화권이 있습니다.");
         }
     }
 

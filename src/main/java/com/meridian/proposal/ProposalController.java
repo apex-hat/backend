@@ -1,5 +1,6 @@
 package com.meridian.proposal;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -30,7 +31,7 @@ public class ProposalController {
     @PostMapping
     public ResponseEntity<ProposalResponse> createProposal(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
-            @RequestBody ProposalCreateRequest request
+            @Valid @RequestBody ProposalCreateRequest request
     ) {
         ProposalResponse response = proposalService.createProposal(authorizationHeader, request);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
@@ -55,7 +56,7 @@ public class ProposalController {
     public ResponseEntity<ProposalResponse> updateProposal(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
             @PathVariable Long proposalId,
-            @RequestBody ProposalUpdateRequest request
+            @Valid @RequestBody ProposalUpdateRequest request
     ) {
         return ResponseEntity.ok(proposalService.updateProposal(authorizationHeader, proposalId, request));
     }
