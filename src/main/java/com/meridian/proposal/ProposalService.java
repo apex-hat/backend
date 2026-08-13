@@ -112,7 +112,10 @@ public class ProposalService {
         proposal.setContent(request.content());
         proposal.setDeadline(request.deadline());
 
+        // Hibernate는 같은 flush 안에서 insert를 delete보다 먼저 실행하므로,
+        // (proposal_id, culture_name) UNIQUE 제약을 피하려면 delete를 먼저 flush해야 한다.
         proposalTargetCultureRepository.deleteByProposal_Id(proposal.getId());
+        proposalTargetCultureRepository.flush();
         List<String> targetCultures = saveTargetCultures(proposal, request.targetCultures());
 
         return ProposalResponse.from(proposal, targetCultures);
