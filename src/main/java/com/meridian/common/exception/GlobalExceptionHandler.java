@@ -16,6 +16,12 @@ public class GlobalExceptionHandler {
                 .body(ErrorResponse.of("UNAUTHORIZED", ex.getMessage()));
     }
 
+    @ExceptionHandler(DomainException.class)
+    public ResponseEntity<ErrorResponse> handleDomain(DomainException ex) {
+        return ResponseEntity.status(ex.getStatus())
+                .body(ErrorResponse.of(ex.getCode(), ex.getMessage()));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpected(Exception ex) {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
