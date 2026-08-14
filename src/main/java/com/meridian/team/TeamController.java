@@ -1,5 +1,7 @@
 package com.meridian.team;
 
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -7,46 +9,71 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.Map;
+import java.util.List;
 
 /**
  * README §6.3 Team
  */
 @RestController
 @RequestMapping("/api/teams")
+@RequiredArgsConstructor
 public class TeamController {
 
+    private final TeamService teamService;
+
     @PostMapping
-    public ResponseEntity<Void> createTeam(@RequestBody(required = false) Map<String, Object> request) {
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
+    public ResponseEntity<TeamResponse> createTeam(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @RequestBody(required = false) TeamCreateRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(teamService.createTeam(authorizationHeader, request));
     }
 
     @GetMapping
-    public ResponseEntity<Void> listTeams() {
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
+    public ResponseEntity<List<TeamResponse>> listTeams(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader
+    ) {
+        return ResponseEntity.ok(teamService.listTeams(authorizationHeader));
     }
 
     @GetMapping("/{teamId}")
-    public ResponseEntity<Void> getTeam(@PathVariable Long teamId) {
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
+    public ResponseEntity<TeamResponse> getTeam(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long teamId
+    ) {
+        return ResponseEntity.ok(teamService.getTeam(authorizationHeader, teamId));
     }
 
     @GetMapping("/{teamId}/members")
-    public ResponseEntity<Void> listMembers(@PathVariable Long teamId) {
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
+    public ResponseEntity<List<TeamMemberResponse>> listMembers(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long teamId
+    ) {
+        return ResponseEntity.ok(teamService.listMembers(authorizationHeader, teamId));
     }
 
     @PostMapping("/{teamId}/members")
-    public ResponseEntity<Void> addMember(@PathVariable Long teamId,
-                                           @RequestBody(required = false) Map<String, Object> request) {
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
+    public ResponseEntity<TeamMemberResponse> addMember(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long teamId,
+            @RequestBody(required = false) TeamMemberAddRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(teamService.addMember(authorizationHeader, teamId, request));
     }
 
     @DeleteMapping("/{teamId}/members/{userId}")
-    public ResponseEntity<Void> removeMember(@PathVariable Long teamId, @PathVariable Long userId) {
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
+    public ResponseEntity<Void> removeMember(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long teamId,
+            @PathVariable Long userId
+    ) {
+        teamService.removeMember(authorizationHeader, teamId, userId);
+        return ResponseEntity.noContent().build();
     }
 }
