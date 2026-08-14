@@ -75,7 +75,7 @@ public class ProposalService {
     public List<ProposalResponse> listProposals(String authorizationHeader) {
         User user = resolveCurrentUser(authorizationHeader);
 
-        List<Long> teamIds = teamMemberRepository.findByUser_Id(user.getId()).stream()
+        List<Long> teamIds = teamMemberRepository.findAllByUser_Id(user.getId()).stream()
                 .map(member -> member.getTeam().getId())
                 .toList();
 

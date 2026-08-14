@@ -20,13 +20,17 @@ public class UserService {
 
     @Transactional
     public UserResponse getCurrentUser(String authorizationHeader) {
+        return UserResponse.from(getCurrentUserEntity(authorizationHeader));
+    }
+
+    @Transactional
+    public User getCurrentUserEntity(String authorizationHeader) {
         FirebaseUserClaims claims = firebaseTokenVerifier.verify(extractBearerToken(authorizationHeader));
         if (!StringUtils.hasText(claims.uid())) {
             throw new AuthenticationException("Invalid Firebase ID token.");
         }
-        User user = userRepository.findByFirebaseUid(claims.uid())
+        return userRepository.findByFirebaseUid(claims.uid())
                 .orElseGet(() -> userRepository.save(newUser(claims)));
-        return UserResponse.from(user);
     }
 
     private String extractBearerToken(String authorizationHeader) {
