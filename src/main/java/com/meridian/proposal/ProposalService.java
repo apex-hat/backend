@@ -21,8 +21,8 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * README §7 Proposal API. 5개 CRUD endpoint(생성/목록/상세/수정/삭제)만 담당한다.
- * 게시(publish)·완료(complete)는 별도 담당 범위.
+ * README §7 Proposal API. CRUD(생성/목록/상세/수정/삭제) + 게시(publish)를 담당한다.
+ * 완료(complete)는 별도 담당 범위.
  */
 @Service
 @RequiredArgsConstructor
@@ -104,7 +104,7 @@ public class ProposalService {
 
         assertVisible(proposal, user);
         assertAuthor(proposal, user);
-        assertDraft(proposal);
+        assertDraft(proposal, "PROPOSAL_NOT_EDITABLE", "DRAFT 상태의 제안만 수정/삭제할 수 있습니다.");
         assertNoDuplicateCultures(request.targetCultures());
 
         if (!StringUtils.hasText(request.title()) || !StringUtils.hasText(request.content())) {
@@ -131,12 +131,26 @@ public class ProposalService {
 
         assertVisible(proposal, user);
         assertAuthor(proposal, user);
-        assertDraft(proposal);
+        assertDraft(proposal, "PROPOSAL_NOT_EDITABLE", "DRAFT 상태의 제안만 수정/삭제할 수 있습니다.");
 
         cultureAnalysisRepository.findByProposal_Id(proposal.getId())
                 .forEach(analysis -> analysis.setProposal(null));
         proposalTargetCultureRepository.deleteByProposal_Id(proposal.getId());
         proposalRepository.delete(proposal);
+    }
+
+    @Transactional
+    public ProposalResponse publishProposal(String authorizationHeader, Long proposalId) {
+        User user = resolveCurrentUser(authorizationHeader);
+        Proposal proposal = findProposal(proposalId);
+
+        assertVisible(proposal, user);
+        assertAuthor(proposal, user);
+        assertDraft(proposal, "PROPOSAL_NOT_DRAFT", "DRAFT 상태의 제안만 게시할 수 있습니다.");
+
+        proposal.setStatus(ProposalStatus.OPEN);
+
+        return ProposalResponse.from(proposal, targetCulturesOf(proposal));
     }
 
     private Proposal findProposal(Long proposalId) {
@@ -166,9 +180,9 @@ public class ProposalService {
         }
     }
 
-    private void assertDraft(Proposal proposal) {
+    private void assertDraft(Proposal proposal, String code, String message) {
         if (proposal.getStatus() != ProposalStatus.DRAFT) {
-            throw DomainException.conflict("PROPOSAL_NOT_EDITABLE", "DRAFT 상태의 제안만 수정/삭제할 수 있습니다.");
+            throw DomainException.conflict(code, message);
         }
     }
 

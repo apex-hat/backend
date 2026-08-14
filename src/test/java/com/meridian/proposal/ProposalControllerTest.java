@@ -97,6 +97,27 @@ class ProposalControllerTest {
     }
 
     @Test
+    void publishesProposalAndReturns200() throws Exception {
+        ProposalResponse published = new ProposalResponse(100L, "Title", "Content", 1L, 10L, ProposalStatus.OPEN,
+                List.of("KR"), null, null, null, null, Instant.parse("2026-08-12T00:00:00Z"), Instant.parse("2026-08-12T00:00:00Z"));
+        when(proposalService.publishProposal("Bearer id-token", 100L)).thenReturn(published);
+
+        mockMvc.perform(post("/api/proposals/100/publish").header(HttpHeaders.AUTHORIZATION, "Bearer id-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("OPEN"));
+    }
+
+    @Test
+    void publishRejectsNonDraftProposalWith409() throws Exception {
+        when(proposalService.publishProposal("Bearer id-token", 100L))
+                .thenThrow(DomainException.conflict("PROPOSAL_NOT_DRAFT", "DRAFT 상태의 제안만 게시할 수 있습니다."));
+
+        mockMvc.perform(post("/api/proposals/100/publish").header(HttpHeaders.AUTHORIZATION, "Bearer id-token"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("PROPOSAL_NOT_DRAFT"));
+    }
+
+    @Test
     void mapsDomainExceptionToErrorResponse() throws Exception {
         when(proposalService.getProposal("Bearer id-token", 404L))
                 .thenThrow(DomainException.notFound("PROPOSAL_NOT_FOUND", "Proposal not found."));

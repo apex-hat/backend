@@ -71,8 +71,11 @@ public class ProposalController {
     }
 
     @PostMapping("/{proposalId}/publish")
-    public ResponseEntity<Void> publishProposal(@PathVariable Long proposalId) {
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
+    public ResponseEntity<ProposalResponse> publishProposal(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long proposalId
+    ) {
+        return ResponseEntity.ok(proposalService.publishProposal(authorizationHeader, proposalId));
     }
 
     @PostMapping("/{proposalId}/complete")

@@ -226,6 +226,72 @@ class ProposalServiceTest {
                 .isInstanceOf(AuthenticationException.class);
     }
 
+    @Test
+    void publishProposalTransitionsDraftToOpen() {
+        Proposal proposal = draftProposal();
+        when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+        when(proposalTargetCultureRepository.findByProposal_Id(100L)).thenReturn(List.of());
+
+        ProposalResponse response = proposalService.publishProposal(AUTH_HEADER, 100L);
+
+        assertThat(response.status()).isEqualTo(ProposalStatus.OPEN);
+        assertThat(proposal.getStatus()).isEqualTo(ProposalStatus.OPEN);
+    }
+
+    @Test
+    void publishProposalRejectsAlreadyOpenProposal() {
+        Proposal proposal = draftProposal();
+        proposal.setStatus(ProposalStatus.OPEN);
+        when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+
+        assertThatThrownBy(() -> proposalService.publishProposal(AUTH_HEADER, 100L))
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("PROPOSAL_NOT_DRAFT");
+    }
+
+    @Test
+    void publishProposalRejectsOtherNonDraftStatuses() {
+        Proposal proposal = draftProposal();
+        proposal.setStatus(ProposalStatus.CONSENSUS_READY);
+        when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+
+        assertThatThrownBy(() -> proposalService.publishProposal(AUTH_HEADER, 100L))
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("PROPOSAL_NOT_DRAFT");
+    }
+
+    @Test
+    void publishProposalRejectsNonAuthorWithForbidden() {
+        Proposal proposal = draftProposal();
+        proposal.setAuthor(User.builder().id(999L).build());
+        proposal.setStatus(ProposalStatus.OPEN);
+        when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+        when(teamMemberRepository.existsByTeam_IdAndUser_Id(10L, 1L)).thenReturn(true);
+
+        assertThatThrownBy(() -> proposalService.publishProposal(AUTH_HEADER, 100L))
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("PROPOSAL_ACCESS_DENIED");
+    }
+
+    @Test
+    void publishProposalRejectsMissingBearerToken() {
+        assertThatThrownBy(() -> proposalService.publishProposal(null, 100L))
+                .isInstanceOf(AuthenticationException.class);
+    }
+
+    @Test
+    void publishProposalRejectsMissingProposal() {
+        when(proposalRepository.findById(404L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> proposalService.publishProposal(AUTH_HEADER, 404L))
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("PROPOSAL_NOT_FOUND");
+    }
+
     private Proposal draftProposal() {
         Proposal proposal = Proposal.builder()
                 .id(100L)

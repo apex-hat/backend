@@ -144,6 +144,44 @@ class ProposalApiIntegrationTest {
     }
 
     @Test
+    void publishExposesProposalToTeamMembersAndRejectsRepublish() throws Exception {
+        ProposalCreateRequest createRequest = new ProposalCreateRequest(
+                "제목", "내용", team.getId(), List.of(), List.of(), null);
+        String body = mockMvc.perform(post("/api/proposals")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer author-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andReturn().getResponse().getContentAsString();
+        Long proposalId = objectMapper.readTree(body).get("id").asLong();
+
+        // 게시 전에는 팀원에게도 비노출
+        mockMvc.perform(get("/api/proposals/" + proposalId).header(HttpHeaders.AUTHORIZATION, "Bearer member-token"))
+                .andExpect(status().isNotFound());
+
+        mockMvc.perform(post("/api/proposals/" + proposalId + "/publish")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer author-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("OPEN"));
+
+        // 게시 후에는 팀원에게 노출
+        mockMvc.perform(get("/api/proposals/" + proposalId).header(HttpHeaders.AUTHORIZATION, "Bearer member-token"))
+                .andExpect(status().isOk());
+
+        // 이미 OPEN인 제안을 다시 게시하려 하면 거부
+        mockMvc.perform(post("/api/proposals/" + proposalId + "/publish")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer author-token"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("PROPOSAL_NOT_DRAFT"));
+    }
+
+    @Test
+    void publishNonExistentProposalReturns404() throws Exception {
+        mockMvc.perform(post("/api/proposals/999999/publish").header(HttpHeaders.AUTHORIZATION, "Bearer author-token"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PROPOSAL_NOT_FOUND"));
+    }
+
+    @Test
     void nonAuthorTeamMemberCannotSeeOrTouchDraftProposal() throws Exception {
         ProposalCreateRequest createRequest = new ProposalCreateRequest(
                 "제목", "내용", team.getId(), List.of(), List.of(), null);
@@ -168,15 +206,20 @@ class ProposalApiIntegrationTest {
 
     @Test
     void nonAuthorTeamMemberCannotUpdateOrDeletePublishedProposal() throws Exception {
-        // publish API는 별도 담당 범위라, 게시된 상태를 리포지토리로 직접 세팅해 시나리오를 재현한다.
         User author = userRepository.findByFirebaseUid("author-uid").orElseThrow();
-        Proposal published = proposalRepository.save(Proposal.builder()
+        Proposal draft = proposalRepository.save(Proposal.builder()
                 .title("게시된 제안")
                 .content("내용")
                 .author(author)
                 .targetTeam(team)
-                .status(ProposalStatus.OPEN)
+                .status(ProposalStatus.DRAFT)
                 .build());
+
+        mockMvc.perform(post("/api/proposals/" + draft.getId() + "/publish")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer author-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("OPEN"));
+        Proposal published = proposalRepository.findById(draft.getId()).orElseThrow();
 
         ProposalUpdateRequest updateRequest = new ProposalUpdateRequest("변경", "변경 내용", List.of(), null);
         mockMvc.perform(put("/api/proposals/" + published.getId())
