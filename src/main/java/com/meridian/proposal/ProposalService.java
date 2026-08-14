@@ -153,6 +153,16 @@ public class ProposalService {
         return ProposalResponse.from(proposal, targetCulturesOf(proposal));
     }
 
+    /**
+     * 다른 도메인(Opinion 등)이 Proposal 접근 권한 검증을 재사용하기 위한 공개 메서드.
+     * 기존 findProposal + assertVisible을 그대로 감쌀 뿐, 새로운 접근 제어 로직은 추가하지 않는다.
+     */
+    public Proposal getVisibleProposal(Long proposalId, User user) {
+        Proposal proposal = findProposal(proposalId);
+        assertVisible(proposal, user);
+        return proposal;
+    }
+
     private Proposal findProposal(Long proposalId) {
         return proposalRepository.findById(proposalId)
                 .orElseThrow(() -> DomainException.notFound("PROPOSAL_NOT_FOUND", "Proposal not found."));
