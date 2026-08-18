@@ -54,7 +54,7 @@ AI 합의 요약
 | Firebase Functions      | REST API 진입점 / API Gateway |
 | Firebase Authentication | 사용자 인증                     |
 | PostgreSQL              | 주요 서비스 데이터 저장              |
-| AI API                  | 문화 맥락 / 의도 / 합의 분석 (제공자 미확정, 개발 중 선정) |
+| AI API                  | 문화 맥락 / 의도 / 합의 분석 (OpenAI) |
 
 ## Frontend
 
@@ -1084,7 +1084,8 @@ FIREBASE_PROJECT_ID=
 FIREBASE_CLIENT_EMAIL=
 FIREBASE_PRIVATE_KEY=
 
-AI_API_KEY=
+OPENAI_API_KEY=
+OPENAI_MODEL=
 ```
 
 실제 API Key 및 Secret 값은 Git Repository에 업로드하지 않습니다.
