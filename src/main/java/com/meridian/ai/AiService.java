@@ -21,6 +21,7 @@ public class AiService {
     private final UserService userService;
     private final CultureAnalysisEngine cultureAnalysisEngine;
     private final CultureAnalysisRepository cultureAnalysisRepository;
+    private final IntentAnalysisEngine intentAnalysisEngine;
 
     @Transactional
     public ContextAnalysisResponse contextAnalysis(String authorizationHeader, ContextAnalysisRequest request) {
@@ -37,6 +38,17 @@ public class AiService {
                 .build());
 
         return ContextAnalysisResponse.from(analysis, OBJECT_MAPPER);
+    }
+
+    /**
+     * README §9.3 숨은 의도 분석. DB에 저장하지 않는다 — ERD(§13.1)에 저장 테이블이 없음.
+     */
+    public IntentAnalysisResponse intentAnalysis(String authorizationHeader, IntentAnalysisRequest request) {
+        userService.getCurrentUserEntity(authorizationHeader);
+
+        IntentAnalysisResult result = intentAnalysisEngine.analyze(request.content());
+
+        return IntentAnalysisResponse.from(request.content(), result);
     }
 
     private String writeJson(Object value) {

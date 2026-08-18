@@ -28,12 +28,14 @@ class AiServiceTest {
     private CultureAnalysisEngine cultureAnalysisEngine;
     @Mock
     private CultureAnalysisRepository cultureAnalysisRepository;
+    @Mock
+    private IntentAnalysisEngine intentAnalysisEngine;
 
     private AiService aiService;
 
     @BeforeEach
     void setUp() {
-        aiService = new AiService(userService, cultureAnalysisEngine, cultureAnalysisRepository);
+        aiService = new AiService(userService, cultureAnalysisEngine, cultureAnalysisRepository, intentAnalysisEngine);
         lenient().when(userService.getCurrentUserEntity(AUTH_HEADER)).thenReturn(User.builder().id(1L).build());
     }
 
@@ -90,6 +92,30 @@ class AiServiceTest {
         ContextAnalysisRequest request = new ContextAnalysisRequest("원문", List.of());
 
         assertThatThrownBy(() -> aiService.contextAnalysis(null, request))
+                .isInstanceOf(AuthenticationException.class);
+    }
+
+    @Test
+    void intentAnalysisReturnsEngineResultWithoutPersisting() {
+        IntentAnalysisRequest request = new IntentAnalysisRequest("괜찮은 것 같아요. 다만 일정이 조금 걱정되네요.");
+        when(intentAnalysisEngine.analyze(request.content()))
+                .thenReturn(new IntentAnalysisResult("긍정", "일정 측면에서 조건부 반대 또는 우려 가능성"));
+
+        IntentAnalysisResponse response = aiService.intentAnalysis(AUTH_HEADER, request);
+
+        assertThat(response.content()).isEqualTo(request.content());
+        assertThat(response.surfaceOpinion()).isEqualTo("긍정");
+        assertThat(response.potentialOpinion()).isEqualTo("일정 측면에서 조건부 반대 또는 우려 가능성");
+    }
+
+    @Test
+    void intentAnalysisRejectsMissingBearerToken() {
+        when(userService.getCurrentUserEntity(null))
+                .thenThrow(new AuthenticationException("Bearer token is required."));
+
+        IntentAnalysisRequest request = new IntentAnalysisRequest("원문");
+
+        assertThatThrownBy(() -> aiService.intentAnalysis(null, request))
                 .isInstanceOf(AuthenticationException.class);
     }
 }

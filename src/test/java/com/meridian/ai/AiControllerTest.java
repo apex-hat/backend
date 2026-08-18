@@ -74,4 +74,44 @@ class AiControllerTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
     }
+
+    @Test
+    void intentAnalysisReturns200WithBody() throws Exception {
+        IntentAnalysisRequest request = new IntentAnalysisRequest("괜찮은 것 같아요. 다만 일정이 조금 걱정되네요.");
+        IntentAnalysisResponse response = new IntentAnalysisResponse(request.content(), "긍정", "조건부 반대 또는 우려 가능성");
+
+        when(aiService.intentAnalysis(eq("Bearer id-token"), any(IntentAnalysisRequest.class))).thenReturn(response);
+
+        mockMvc.perform(post("/api/ai/intent-analysis")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer id-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.surfaceOpinion").value("긍정"))
+                .andExpect(jsonPath("$.potentialOpinion").value("조건부 반대 또는 우려 가능성"));
+    }
+
+    @Test
+    void intentAnalysisRejectsBlankContentWith400() throws Exception {
+        IntentAnalysisRequest request = new IntentAnalysisRequest("  ");
+
+        mockMvc.perform(post("/api/ai/intent-analysis")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer id-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+    }
+
+    @Test
+    void intentAnalysisMapsMissingBearerTokenTo401() throws Exception {
+        when(aiService.intentAnalysis(eq((String) null), any(IntentAnalysisRequest.class)))
+                .thenThrow(new AuthenticationException("Bearer token is required."));
+
+        mockMvc.perform(post("/api/ai/intent-analysis")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(new IntentAnalysisRequest("원문"))))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
+    }
 }

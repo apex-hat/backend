@@ -39,6 +39,8 @@ class AiApiIntegrationTest {
     private FirebaseTokenVerifier firebaseTokenVerifier;
     @MockitoBean
     private CultureAnalysisEngine cultureAnalysisEngine;
+    @MockitoBean
+    private IntentAnalysisEngine intentAnalysisEngine;
     @Autowired
     private CultureAnalysisRepository cultureAnalysisRepository;
 
@@ -100,6 +102,49 @@ class AiApiIntegrationTest {
         ContextAnalysisRequest request = new ContextAnalysisRequest("   ", List.of());
 
         mockMvc.perform(post("/api/ai/context-analysis")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer id-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+    }
+
+    @Test
+    void intentAnalysisReturnsEngineResultAndDoesNotPersist() throws Exception {
+        long countBefore = cultureAnalysisRepository.count();
+
+        IntentAnalysisRequest request = new IntentAnalysisRequest("괜찮은 것 같아요. 다만 일정이 조금 걱정되네요.");
+        when(intentAnalysisEngine.analyze(eq(request.content())))
+                .thenReturn(new IntentAnalysisResult("긍정", "일정 측면에서 조건부 반대 또는 우려 가능성"));
+
+        mockMvc.perform(post("/api/ai/intent-analysis")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer id-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").value(request.content()))
+                .andExpect(jsonPath("$.surfaceOpinion").value("긍정"))
+                .andExpect(jsonPath("$.potentialOpinion").value("일정 측면에서 조건부 반대 또는 우려 가능성"));
+
+        assertThat(cultureAnalysisRepository.count()).isEqualTo(countBefore);
+    }
+
+    @Test
+    void intentAnalysisRejectsRequestWithoutBearerToken() throws Exception {
+        IntentAnalysisRequest request = new IntentAnalysisRequest("원문");
+
+        mockMvc.perform(post("/api/ai/intent-analysis")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
+    }
+
+    @Test
+    void intentAnalysisRejectsBlankContent() throws Exception {
+        IntentAnalysisRequest request = new IntentAnalysisRequest("   ");
+
+        mockMvc.perform(post("/api/ai/intent-analysis")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer id-token")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(request)))

@@ -38,7 +38,10 @@ public class AiController {
     }
 
     @PostMapping("/intent-analysis")
-    public ResponseEntity<Void> intentAnalysis(@RequestBody(required = false) Map<String, Object> request) {
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
+    public ResponseEntity<IntentAnalysisResponse> intentAnalysis(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @Valid @RequestBody IntentAnalysisRequest request
+    ) {
+        return ResponseEntity.ok(aiService.intentAnalysis(authorizationHeader, request));
     }
 }
