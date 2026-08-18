@@ -1,11 +1,10 @@
 package com.meridian.ai;
 
 import com.openai.client.OpenAIClient;
-import com.openai.client.okhttp.OpenAIOkHttpClient;
 import com.openai.models.responses.StructuredResponse;
 import com.openai.models.responses.StructuredResponseCreateParams;
 import com.openai.models.responses.StructuredResponseOutputItem;
-import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -15,13 +14,21 @@ import java.util.List;
  * {@link CultureAnalysisEngine}의 실제 구현체. OpenAI Responses API를 Structured Outputs로 호출해
  * {@link CultureAnalysisResult}를 곧바로 스키마 검증된 형태로 받는다. OpenAI SDK 관련 코드는 이 클래스
  * 안에만 존재하고, {@link AiService}/컨트롤러/DTO/entity는 이 구현체 교체와 무관하다.
+ * {@link OpenAIClient}는 {@link OpenAiConfiguration}이 만든 애플리케이션 전역 싱글톤 빈을 주입받아 쓴다.
+ * 생성자 파라미터에 {@code @Lazy}를 직접 붙여야 이 엔진이 즉시(eager) 생성되어도 실제
+ * {@link OpenAIClient} 생성(및 API 키 검증)은 첫 {@link #analyze} 호출 시점까지 미뤄진다 —
+ * {@code @Bean} 메서드의 {@code @Lazy}만으로는 생성자 주입 시점에 즉시 resolve된다.
  */
 @Component
-@RequiredArgsConstructor
 public class OpenAiCultureAnalysisEngine implements CultureAnalysisEngine {
 
     private final OpenAiProperties properties;
-    private volatile OpenAIClient client;
+    private final OpenAIClient client;
+
+    public OpenAiCultureAnalysisEngine(OpenAiProperties properties, @Lazy OpenAIClient client) {
+        this.properties = properties;
+        this.client = client;
+    }
 
     @Override
     public CultureAnalysisResult analyze(String originalText, List<String> targetCultures) {
@@ -34,7 +41,7 @@ public class OpenAiCultureAnalysisEngine implements CultureAnalysisEngine {
                         .text(CultureAnalysisResult.class)
                         .build();
 
-        StructuredResponse<CultureAnalysisResult> response = client().responses().create(params);
+        StructuredResponse<CultureAnalysisResult> response = client.responses().create(params);
 
         return response.output().stream()
                 .filter(StructuredResponseOutputItem::isMessage)
@@ -60,22 +67,6 @@ public class OpenAiCultureAnalysisEngine implements CultureAnalysisEngine {
                 culture, any phrases that could be misread across cultures, and a suggested rewrite \
                 that reduces the risk.
                 """.formatted(cultures, originalText);
-    }
-
-    private OpenAIClient client() {
-        OpenAIClient current = client;
-        if (current == null) {
-            synchronized (this) {
-                current = client;
-                if (current == null) {
-                    current = OpenAIOkHttpClient.builder()
-                            .apiKey(requireConfig(properties.apiKey(), "OPENAI_API_KEY"))
-                            .build();
-                    client = current;
-                }
-            }
-        }
-        return current;
     }
 
     private String requireConfig(String value, String envVarName) {
