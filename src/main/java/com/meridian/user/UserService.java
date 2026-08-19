@@ -3,6 +3,7 @@ package com.meridian.user;
 import com.meridian.auth.AuthenticationException;
 import com.meridian.auth.FirebaseTokenVerifier;
 import com.meridian.auth.FirebaseUserClaims;
+import com.meridian.common.exception.DomainException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
@@ -45,6 +46,15 @@ public class UserService {
         if (StringUtils.hasText(request.cultureTag())) user.setCultureTag(request.cultureTag());
 
         return UserResponse.from(user);
+    }
+
+    /** 팀원 초대 UI에서 이메일로 사용자를 찾을 때 사용. 검색 자체도 인증된 사용자만 가능하다. */
+    @Transactional
+    public UserSummaryResponse searchByEmail(String authorizationHeader, String email) {
+        getCurrentUserEntity(authorizationHeader);
+        User found = userRepository.findByEmail(email)
+                .orElseThrow(() -> DomainException.notFound("USER_NOT_FOUND", "해당 이메일의 사용자를 찾을 수 없습니다."));
+        return UserSummaryResponse.from(found);
     }
 
     private String extractBearerToken(String authorizationHeader) {
