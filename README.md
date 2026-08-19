@@ -661,11 +661,51 @@ PROPOSAL_CREATED
 OPINION_REQUESTED
 DEADLINE_APPROACHING
 CONSENSUS_SUMMARY_COMPLETED
+FRIEND_REQUEST
 ```
 
 > `notifications.type`도 위 값을 그대로 사용합니다.
 
 동일 이벤트에 대한 중복 알림은 방지합니다. `PROPOSAL_CREATED`, `OPINION_REQUESTED`, `CONSENSUS_SUMMARY_COMPLETED`처럼 사용자-제안 조합당 한 번만 발생해야 하는 이벤트는 알림 생성 전 `(user_id, proposal_id, type)` 조합으로 기존 알림 존재 여부를 확인해 중복 생성을 막습니다. `DEADLINE_APPROACHING`처럼 반복 발생이 정상인 이벤트는 대상에서 제외하고 발송 이력(예: 최근 발송 시각)을 기준으로 재발송 여부를 판단합니다.
+
+`FRIEND_REQUEST`는 아래 Friend API에서 친구 요청이 생성될 때 수신자에게 발송됩니다.
+
+---
+
+## Friend API
+
+사용자마다 고유 코드(`friendCode`, 예: `MER-7F3K`)를 가지며, `GET /api/users/me` 응답의 `friendCode` 필드로 확인할 수 있습니다. 이 코드로 서로를 찾아 친구 요청을 보내고 수락하는 API입니다.
+
+| 기능        | Method | Endpoint                          | 설명                                  |
+| --------- | ------ | ---------------------------------- | ------------------------------------ |
+| 친구 요청 보내기 | POST   | `/api/friends/requests`            | 상대의 `friendCode`로 친구 요청 전송 |
+| 받은 요청 목록  | GET    | `/api/friends/requests`            | 나에게 온 PENDING 상태 요청 목록      |
+| 요청 수락/거절  | PATCH  | `/api/friends/requests/{requestId}` | `accept: true/false`로 응답        |
+| 친구 목록 조회  | GET    | `/api/friends`                     | 수락된(ACCEPTED) 친구 목록          |
+
+```http
+POST /api/friends/requests
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "friendCode": "MER-7F3K"
+}
+```
+
+자기 자신에게 보내면 `400 SELF_FRIEND_REQUEST`, 존재하지 않는 코드면 `404 USER_NOT_FOUND`, 이미 친구이거나 요청이 진행 중이면 `409 FRIEND_REQUEST_EXISTS`를 반환합니다. 요청이 성공하면 상대방에게 `FRIEND_REQUEST` 타입 알림이 생성됩니다.
+
+```http
+PATCH /api/friends/requests/{requestId}
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "accept": true
+}
+```
+
+수신자 본인만 응답할 수 있으며(`403 FRIEND_REQUEST_ACCESS_DENIED`), 이미 처리된 요청에 다시 응답하면 `409 FRIEND_REQUEST_ALREADY_RESOLVED`를 반환합니다.
 
 ---
 
@@ -703,6 +743,10 @@ CONSENSUS_SUMMARY_COMPLETED
 | Dashboard    | GET    | `/api/dashboard/status?proposalId={proposalId}` | 응답 현황 조회 |
 | Notification | GET    | `/api/notifications`                   | 알림 목록 조회    |
 | Notification | PATCH  | `/api/notifications/{notificationId}`  | 알림 읽음 처리    |
+| Friend       | POST   | `/api/friends/requests`                | 친구 요청 보내기   |
+| Friend       | GET    | `/api/friends/requests`                | 받은 요청 목록    |
+| Friend       | PATCH  | `/api/friends/requests/{requestId}`    | 요청 수락/거절    |
+| Friend       | GET    | `/api/friends`                         | 친구 목록 조회    |
 
 ---
 

@@ -11,6 +11,7 @@ public record UserResponse(
         String timeZone,
         String location,
         String cultureTag,
+        String friendCode,
         Instant createdAt,
         Instant updatedAt
 ) {
@@ -25,6 +26,7 @@ public record UserResponse(
                 user.getTimeZone(),
                 user.getLocation(),
                 user.getCultureTag(),
+                user.getFriendCode(),
                 user.getCreatedAt(),
                 user.getUpdatedAt()
         );
