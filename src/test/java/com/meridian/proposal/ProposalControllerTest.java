@@ -118,6 +118,50 @@ class ProposalControllerTest {
     }
 
     @Test
+    void completesProposalAndReturns200() throws Exception {
+        ProposalCompleteRequest request = new ProposalCompleteRequest("B안을 채택합니다.");
+        ProposalResponse completed = new ProposalResponse(100L, "Title", "Content", 1L, 10L, ProposalStatus.COMPLETED,
+                List.of("KR"), null, "B안을 채택합니다.", 1L, Instant.parse("2026-08-12T00:00:00Z"),
+                Instant.parse("2026-08-12T00:00:00Z"), Instant.parse("2026-08-12T00:00:00Z"));
+        when(proposalService.completeProposal(eq("Bearer id-token"), eq(100L), any(ProposalCompleteRequest.class)))
+                .thenReturn(completed);
+
+        mockMvc.perform(post("/api/proposals/100/complete")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer id-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.decision").value("B안을 채택합니다."));
+    }
+
+    @Test
+    void completeRejectsNonConsensusReadyProposalWith409() throws Exception {
+        ProposalCompleteRequest request = new ProposalCompleteRequest("B안을 채택합니다.");
+        when(proposalService.completeProposal(eq("Bearer id-token"), eq(100L), any(ProposalCompleteRequest.class)))
+                .thenThrow(DomainException.conflict("PROPOSAL_NOT_CONSENSUS_READY", "CONSENSUS_READY 상태의 제안만 완료 처리할 수 있습니다."));
+
+        mockMvc.perform(post("/api/proposals/100/complete")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer id-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("PROPOSAL_NOT_CONSENSUS_READY"));
+    }
+
+    @Test
+    void completeRejectsBlankDecisionWith400() throws Exception {
+        ProposalCompleteRequest request = new ProposalCompleteRequest("  ");
+
+        mockMvc.perform(post("/api/proposals/100/complete")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer id-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+    }
+
+    @Test
     void mapsDomainExceptionToErrorResponse() throws Exception {
         when(proposalService.getProposal("Bearer id-token", 404L))
                 .thenThrow(DomainException.notFound("PROPOSAL_NOT_FOUND", "Proposal not found."));
