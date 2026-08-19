@@ -111,6 +111,40 @@ class UserServiceTest {
         assertThat(captor.getValue().getTimeZone()).isEqualTo("Asia/Seoul");
     }
 
+    @Test
+    void updatesOnlyProvidedFields() {
+        User existing = User.builder()
+                .id(1L)
+                .firebaseUid("firebase-uid")
+                .name("Old Name")
+                .country("KR")
+                .timeZone("UTC")
+                .location(null)
+                .cultureTag(null)
+                .build();
+
+        when(firebaseTokenVerifier.verify("id-token")).thenReturn(claims(null));
+        when(userRepository.findByFirebaseUid("firebase-uid")).thenReturn(Optional.of(existing));
+
+        UserUpdateRequest request = new UserUpdateRequest(null, null, "Asia/Seoul", "Seoul", "high-context");
+        UserResponse response = userService.updateCurrentUser("Bearer id-token", request);
+
+        assertThat(response.name()).isEqualTo("Old Name");
+        assertThat(response.country()).isEqualTo("KR");
+        assertThat(response.timeZone()).isEqualTo("Asia/Seoul");
+        assertThat(response.location()).isEqualTo("Seoul");
+        assertThat(response.cultureTag()).isEqualTo("high-context");
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void updateCurrentUserRejectsMissingBearerToken() {
+        UserUpdateRequest request = new UserUpdateRequest("Name", null, null, null, null);
+
+        assertThatThrownBy(() -> userService.updateCurrentUser(null, request))
+                .isInstanceOf(AuthenticationException.class);
+    }
+
     private FirebaseUserClaims claims(String timeZone) {
         return new FirebaseUserClaims(
                 "firebase-uid",

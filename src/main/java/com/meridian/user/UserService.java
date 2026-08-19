@@ -33,6 +33,20 @@ public class UserService {
                 .orElseGet(() -> userRepository.save(newUser(claims)));
     }
 
+    /** PATCH /api/users/me — 전달된 필드만 반영하는 부분 수정. null은 변경하지 않음을 뜻한다. */
+    @Transactional
+    public UserResponse updateCurrentUser(String authorizationHeader, UserUpdateRequest request) {
+        User user = getCurrentUserEntity(authorizationHeader);
+
+        if (StringUtils.hasText(request.name())) user.setName(request.name());
+        if (StringUtils.hasText(request.country())) user.setCountry(request.country());
+        if (StringUtils.hasText(request.timeZone())) user.setTimeZone(request.timeZone());
+        if (StringUtils.hasText(request.location())) user.setLocation(request.location());
+        if (StringUtils.hasText(request.cultureTag())) user.setCultureTag(request.cultureTag());
+
+        return UserResponse.from(user);
+    }
+
     private String extractBearerToken(String authorizationHeader) {
         if (!StringUtils.hasText(authorizationHeader)
                 || !authorizationHeader.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {
