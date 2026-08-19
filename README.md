@@ -226,13 +226,33 @@ Meridian의 실제 인증(계정 생성, 로그인, 세션/토큰 발급)은 **F
 
 ## 6.2 User
 
-| 기능        | Method | Endpoint        | 설명             |
-| --------- | ------ | --------------- | -------------- |
-| 사용자 정보 조회 | GET    | `/api/users/me` | 로그인한 사용자 정보 조회 |
+| 기능        | Method | Endpoint            | 설명                          |
+| --------- | ------ | ------------------- | --------------------------- |
+| 사용자 정보 조회 | GET    | `/api/users/me`     | 로그인한 사용자 정보 조회               |
+| 사용자 이메일 검색 | GET    | `/api/users/search` | 이메일로 사용자 검색(팀원 초대 시 userId 확인용) |
 
 ```http
 GET /api/users/me
 Authorization: Bearer <Firebase ID Token>
+```
+
+### 사용자 이메일 검색
+
+```http
+GET /api/users/search?email={email}
+Authorization: Bearer <Firebase ID Token>
+```
+
+팀원을 초대하려면 `POST /api/teams/{teamId}/members`에 대상의 `userId`가 필요한데, 초대하는 쪽은 보통 상대의 이메일만 알고 있다. 이 endpoint는 정확히 일치하는 이메일로 가입된 사용자를 찾아 `id`/`name`/`email`만 반환한다(`firebaseUid` 등 민감 정보는 제외). 인증된 사용자만 검색할 수 있으며, 일치하는 사용자가 없으면 `404 USER_NOT_FOUND`를 반환한다.
+
+예상 응답:
+
+```json
+{
+  "id": 12,
+  "name": "이민아",
+  "email": "teammate@example.com"
+}
 ```
 
 ---
@@ -633,6 +653,7 @@ CONSENSUS_SUMMARY_COMPLETED
 | Auth         | POST   | `/api/auth/signup`                     | 회원가입        |
 | Auth         | POST   | `/api/auth/logout`                     | 로그아웃        |
 | User         | GET    | `/api/users/me`                        | 사용자 정보 조회   |
+| User         | GET    | `/api/users/search?email={email}`      | 이메일로 사용자 검색 |
 | Team         | POST   | `/api/teams`                           | 팀 생성        |
 | Team         | GET    | `/api/teams`                           | 팀 목록 조회     |
 | Team         | GET    | `/api/teams/{teamId}`                  | 팀 상세 조회     |
