@@ -3,6 +3,7 @@ package com.meridian.user;
 import com.meridian.auth.AuthenticationException;
 import com.meridian.auth.FirebaseTokenVerifier;
 import com.meridian.auth.FirebaseUserClaims;
+import com.meridian.common.exception.DomainException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -109,6 +110,34 @@ class UserServiceTest {
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(captor.capture());
         assertThat(captor.getValue().getTimeZone()).isEqualTo("Asia/Seoul");
+    }
+
+    @Test
+    void returnsUserSummaryWhenEmailFound() {
+        when(firebaseTokenVerifier.verify("id-token")).thenReturn(claims(null));
+        when(userRepository.findByFirebaseUid("firebase-uid")).thenReturn(Optional.of(
+                User.builder().id(1L).firebaseUid("firebase-uid").build()));
+        when(userRepository.findByEmail("teammate@example.com")).thenReturn(Optional.of(
+                User.builder().id(2L).name("Teammate").email("teammate@example.com").build()));
+
+        UserSummaryResponse response = userService.searchByEmail("Bearer id-token", "teammate@example.com");
+
+        assertThat(response.id()).isEqualTo(2L);
+        assertThat(response.name()).isEqualTo("Teammate");
+        assertThat(response.email()).isEqualTo("teammate@example.com");
+    }
+
+    @Test
+    void throwsNotFoundWhenEmailDoesNotMatchAnyUser() {
+        when(firebaseTokenVerifier.verify("id-token")).thenReturn(claims(null));
+        when(userRepository.findByFirebaseUid("firebase-uid")).thenReturn(Optional.of(
+                User.builder().id(1L).firebaseUid("firebase-uid").build()));
+        when(userRepository.findByEmail("nobody@example.com")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> userService.searchByEmail("Bearer id-token", "nobody@example.com"))
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("USER_NOT_FOUND");
     }
 
     private FirebaseUserClaims claims(String timeZone) {
