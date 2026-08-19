@@ -11,8 +11,6 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.Map;
-
 /**
  * README §9 AI API
  */
@@ -33,8 +31,12 @@ public class AiController {
     }
 
     @PostMapping("/consensus-summary")
-    public ResponseEntity<Void> consensusSummary(@RequestBody(required = false) Map<String, Object> request) {
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
+    public ResponseEntity<ConsensusSummaryResponse> consensusSummary(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @Valid @RequestBody ConsensusSummaryRequest request
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(aiService.consensusSummary(authorizationHeader, request));
     }
 
     @PostMapping("/intent-analysis")

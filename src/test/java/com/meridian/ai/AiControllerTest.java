@@ -2,6 +2,7 @@ package com.meridian.ai;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meridian.auth.AuthenticationException;
+import com.meridian.common.exception.DomainException;
 import com.meridian.common.exception.GlobalExceptionHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -113,5 +114,46 @@ class AiControllerTest {
                         .content(objectMapper.writeValueAsString(new IntentAnalysisRequest("원문"))))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
+    }
+
+    @Test
+    void consensusSummaryReturns201WithBody() throws Exception {
+        ConsensusSummaryRequest request = new ConsensusSummaryRequest(100L);
+        ConsensusSummaryResponse response = new ConsensusSummaryResponse(
+                1L, 100L, ConsensusStatus.PARTIAL, "부분 합의", List.of("일정"), List.of("문화 차이"),
+                List.of("완곡한 반대"), "추가 논의 필요", java.time.Instant.parse("2026-08-19T00:00:00Z"));
+
+        when(aiService.consensusSummary(eq("Bearer id-token"), any(ConsensusSummaryRequest.class))).thenReturn(response);
+
+        mockMvc.perform(post("/api/ai/consensus-summary")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer id-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.consensusStatus").value("PARTIAL"))
+                .andExpect(jsonPath("$.keyIssues[0]").value("일정"));
+    }
+
+    @Test
+    void consensusSummaryRejectsMissingProposalIdWith400() throws Exception {
+        mockMvc.perform(post("/api/ai/consensus-summary")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer id-token")
+                        .contentType("application/json")
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+    }
+
+    @Test
+    void consensusSummaryMapsInsufficientResponsesTo409() throws Exception {
+        when(aiService.consensusSummary(eq("Bearer id-token"), any(ConsensusSummaryRequest.class)))
+                .thenThrow(DomainException.conflict("INSUFFICIENT_RESPONSES", "아직 응답 인원이 부족합니다."));
+
+        mockMvc.perform(post("/api/ai/consensus-summary")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer id-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(new ConsensusSummaryRequest(100L))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("INSUFFICIENT_RESPONSES"));
     }
 }
