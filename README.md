@@ -226,13 +226,37 @@ Meridian의 실제 인증(계정 생성, 로그인, 세션/토큰 발급)은 **F
 
 ## 6.2 User
 
-| 기능        | Method | Endpoint        | 설명             |
-| --------- | ------ | --------------- | -------------- |
-| 사용자 정보 조회 | GET    | `/api/users/me` | 로그인한 사용자 정보 조회 |
+| 기능        | Method | Endpoint        | 설명                |
+| --------- | ------ | --------------- | ----------------- |
+| 사용자 정보 조회 | GET    | `/api/users/me` | 로그인한 사용자 정보 조회     |
+| 사용자 정보 수정 | PATCH  | `/api/users/me` | 로그인한 사용자 정보 부분 수정 |
 
 ```http
 GET /api/users/me
 Authorization: Bearer <Firebase ID Token>
+```
+
+### 사용자 정보 수정
+
+```http
+PATCH /api/users/me
+Authorization: Bearer <Firebase ID Token>
+```
+
+JIT 사용자 프로필 동기화는 Firebase ID Token의 claim(email, name 등)만 반영하므로, `country`/`timeZone`/`location`/`cultureTag`는 로그인만으로는 채워지지 않는 경우가 많다(클라이언트 SDK로는 custom claim을 직접 설정할 수 없음). 이 endpoint로 로그인 이후 프로필 정보를 채우거나 수정할 수 있다.
+
+전달된 필드만 반영하는 부분 수정이며, 값을 생략하거나 빈 문자열로 보내면 기존 값을 유지한다(명시적으로 지우는 기능은 없음).
+
+요청 예시:
+
+```json
+{
+  "name": "이민아",
+  "country": "KR",
+  "timeZone": "Asia/Seoul",
+  "location": "Seoul",
+  "cultureTag": "high-context"
+}
 ```
 
 ---
@@ -633,6 +657,7 @@ CONSENSUS_SUMMARY_COMPLETED
 | Auth         | POST   | `/api/auth/signup`                     | 회원가입        |
 | Auth         | POST   | `/api/auth/logout`                     | 로그아웃        |
 | User         | GET    | `/api/users/me`                        | 사용자 정보 조회   |
+| User         | PATCH  | `/api/users/me`                        | 사용자 정보 부분 수정 |
 | Team         | POST   | `/api/teams`                           | 팀 생성        |
 | Team         | GET    | `/api/teams`                           | 팀 목록 조회     |
 | Team         | GET    | `/api/teams/{teamId}`                  | 팀 상세 조회     |
