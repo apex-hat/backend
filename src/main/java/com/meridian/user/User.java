@@ -35,6 +35,10 @@ public class User {
     @Column(nullable = false, unique = true)
     private String firebaseUid;
 
+    /** 친구 요청에 쓰는 고유 코드(예: "MER-7F3K"). 화면에는 "#" 접두사를 붙여 표시한다. */
+    @Column(unique = true)
+    private String friendCode;
+
     private String name;
 
     @Column(unique = true)

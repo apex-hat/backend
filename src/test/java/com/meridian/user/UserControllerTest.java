@@ -46,6 +46,7 @@ class UserControllerTest {
                 "UTC",
                 "Seoul",
                 "ko-KR",
+                "MER-AAAA",
                 Instant.parse("2026-08-12T00:00:00Z"),
                 Instant.parse("2026-08-12T00:00:01Z")
         );
@@ -75,7 +76,7 @@ class UserControllerTest {
     void updatesCurrentUserProfile() throws Exception {
         UserUpdateRequest request = new UserUpdateRequest(null, null, "Asia/Seoul", "Seoul", "high-context");
         UserResponse response = new UserResponse(
-                1L, "firebase-uid", "User Name", "user@example.com", "KR", "Asia/Seoul", "Seoul", "high-context",
+                1L, "firebase-uid", "User Name", "user@example.com", "KR", "Asia/Seoul", "Seoul", "high-context", "MER-AAAA",
                 Instant.parse("2026-08-12T00:00:00Z"), Instant.parse("2026-08-12T00:00:01Z"));
 
         when(userService.updateCurrentUser(eq("Bearer id-token"), any(UserUpdateRequest.class))).thenReturn(response);
