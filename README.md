@@ -709,6 +709,30 @@ Content-Type: application/json
 
 ---
 
+## Message API
+
+친구 사이에만 주고받을 수 있는 1:1 메시지입니다. 별도의 대화방(Conversation) 개념 없이, 두 사용자의 `userId` 쌍으로 대화가 정해집니다.
+
+| 기능      | Method | Endpoint                     | 설명                          |
+| ------- | ------ | ------------------------------ | --------------------------- |
+| 메시지 전송  | POST   | `/api/messages`                 | `receiverId`, `content`로 전송 |
+| 대화 조회   | GET    | `/api/messages/{friendUserId}`  | 특정 친구와의 전체 대화 내역 조회         |
+
+```http
+POST /api/messages
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "receiverId": 12,
+  "content": "안녕하세요!"
+}
+```
+
+친구 사이가 아니면 `403 NOT_FRIENDS`를 반환합니다. 대화 조회 시 내가 받은 메시지 중 안 읽은 것은 자동으로 읽음 처리됩니다. 실시간 갱신은 별도 구독 없이 클라이언트가 짧은 주기로 다시 조회하는 방식(polling)을 전제로 합니다.
+
+---
+
 # 12. 전체 API Endpoint
 
 | Domain       | Method | Endpoint                               | Description |
@@ -747,6 +771,8 @@ Content-Type: application/json
 | Friend       | GET    | `/api/friends/requests`                | 받은 요청 목록    |
 | Friend       | PATCH  | `/api/friends/requests/{requestId}`    | 요청 수락/거절    |
 | Friend       | GET    | `/api/friends`                         | 친구 목록 조회    |
+| Message      | POST   | `/api/messages`                        | 메시지 전송      |
+| Message      | GET    | `/api/messages/{friendUserId}`         | 특정 친구와의 대화 조회 |
 
 ---
 
@@ -1220,6 +1246,30 @@ gradlew.bat bootRun
 ```text
 http://localhost:8080
 ```
+
+---
+
+## 로컬 DB 스키마 준비 (최초 1회 / pull 받아서 새 테이블이 추가됐을 때)
+
+`application.yml`이 `ddl-auto: validate`라서, Spring Boot가 스키마를 자동으로 만들어주지 않습니다. 실제 DB 테이블이 현재 Entity와 안 맞으면(테이블이 아예 없거나, 새로 추가된 테이블/컬럼이 없으면) **부팅 자체가 실패**합니다.
+
+1. Postgres에 DB/계정이 없다면 먼저 만듭니다.
+   ```bash
+   createdb meridian
+   ```
+2. `.env`를 준비합니다(`DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `FIREBASE_*`, `OPENAI_*` — 팀 채널 공유 값 사용).
+3. **최초 1회, 또는 `develop`을 pull 받은 뒤 새 테이블/컬럼이 추가된 걸 발견했을 때만** 아래처럼 `ddl-auto`를 일시적으로 `update`로 override해서 딱 한 번 부팅합니다. 부팅 로그에 `Hibernate: create table ...` / `alter table ... add column ...`이 찍히면 정상입니다. 서버가 뜨면(`Started MeridianApplication`) `Ctrl+C`로 바로 종료합니다.
+   ```bash
+   set -a && source .env && set +a
+   SPRING_JPA_HIBERNATE_DDL_AUTO=update ./gradlew bootRun
+   ```
+4. 이후에는 평소처럼 `.env`만 로드하고 그냥 실행하면 됩니다(`ddl-auto`는 다시 기본값인 `validate`로 동작).
+   ```bash
+   set -a && source .env && set +a
+   ./gradlew bootRun
+   ```
+
+> 3번 단계를 건너뛰고 계속 `update` 모드로 두면 스키마가 의도치 않게 바뀔 수 있어 권장하지 않습니다. 필요한 순간에만 한 번 켰다 끄는 용도로 씁니다.
 
 ---
 
