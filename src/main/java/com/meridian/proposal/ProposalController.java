@@ -16,7 +16,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * README §7 Proposal API
@@ -79,8 +78,11 @@ public class ProposalController {
     }
 
     @PostMapping("/{proposalId}/complete")
-    public ResponseEntity<Void> completeProposal(@PathVariable Long proposalId,
-                                                  @RequestBody(required = false) Map<String, Object> request) {
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
+    public ResponseEntity<ProposalResponse> completeProposal(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long proposalId,
+            @Valid @RequestBody ProposalCompleteRequest request
+    ) {
+        return ResponseEntity.ok(proposalService.completeProposal(authorizationHeader, proposalId, request));
     }
 }

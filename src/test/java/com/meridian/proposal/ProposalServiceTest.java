@@ -292,6 +292,60 @@ class ProposalServiceTest {
                 .isEqualTo("PROPOSAL_NOT_FOUND");
     }
 
+    @Test
+    void completeProposalTransitionsConsensusReadyToCompletedWithDecision() {
+        Proposal proposal = draftProposal();
+        proposal.setStatus(ProposalStatus.CONSENSUS_READY);
+        when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+        when(proposalTargetCultureRepository.findByProposal_Id(100L)).thenReturn(List.of());
+
+        ProposalCompleteRequest request = new ProposalCompleteRequest("B안을 채택합니다.");
+        ProposalResponse response = proposalService.completeProposal(AUTH_HEADER, 100L, request);
+
+        assertThat(response.status()).isEqualTo(ProposalStatus.COMPLETED);
+        assertThat(proposal.getDecision()).isEqualTo("B안을 채택합니다.");
+        assertThat(proposal.getDecidedBy()).isEqualTo(author);
+        assertThat(proposal.getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    void completeProposalRejectsNonConsensusReadyStatus() {
+        Proposal proposal = draftProposal();
+        proposal.setStatus(ProposalStatus.OPEN);
+        when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+
+        ProposalCompleteRequest request = new ProposalCompleteRequest("B안을 채택합니다.");
+
+        assertThatThrownBy(() -> proposalService.completeProposal(AUTH_HEADER, 100L, request))
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("PROPOSAL_NOT_CONSENSUS_READY");
+    }
+
+    @Test
+    void completeProposalRejectsNonAuthorWithForbidden() {
+        Proposal proposal = draftProposal();
+        proposal.setAuthor(User.builder().id(999L).build());
+        proposal.setStatus(ProposalStatus.CONSENSUS_READY);
+        when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+        when(teamMemberRepository.existsByTeam_IdAndUser_Id(10L, 1L)).thenReturn(true);
+
+        ProposalCompleteRequest request = new ProposalCompleteRequest("B안을 채택합니다.");
+
+        assertThatThrownBy(() -> proposalService.completeProposal(AUTH_HEADER, 100L, request))
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("PROPOSAL_ACCESS_DENIED");
+    }
+
+    @Test
+    void completeProposalRejectsMissingBearerToken() {
+        ProposalCompleteRequest request = new ProposalCompleteRequest("B안을 채택합니다.");
+
+        assertThatThrownBy(() -> proposalService.completeProposal(null, 100L, request))
+                .isInstanceOf(AuthenticationException.class);
+    }
+
     private Proposal draftProposal() {
         Proposal proposal = Proposal.builder()
                 .id(100L)

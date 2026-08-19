@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -149,6 +150,25 @@ public class ProposalService {
         assertDraft(proposal, "PROPOSAL_NOT_DRAFT", "DRAFT 상태의 제안만 게시할 수 있습니다.");
 
         proposal.setStatus(ProposalStatus.OPEN);
+
+        return ProposalResponse.from(proposal, targetCulturesOf(proposal));
+    }
+
+    @Transactional
+    public ProposalResponse completeProposal(String authorizationHeader, Long proposalId, ProposalCompleteRequest request) {
+        User user = resolveCurrentUser(authorizationHeader);
+        Proposal proposal = findProposal(proposalId);
+
+        assertVisible(proposal, user);
+        assertAuthor(proposal, user);
+        if (proposal.getStatus() != ProposalStatus.CONSENSUS_READY) {
+            throw DomainException.conflict("PROPOSAL_NOT_CONSENSUS_READY", "CONSENSUS_READY 상태의 제안만 완료 처리할 수 있습니다.");
+        }
+
+        proposal.setDecision(request.decision());
+        proposal.setDecidedBy(user);
+        proposal.setCompletedAt(Instant.now());
+        proposal.setStatus(ProposalStatus.COMPLETED);
 
         return ProposalResponse.from(proposal, targetCulturesOf(proposal));
     }
