@@ -1,8 +1,10 @@
 package com.meridian.dashboard;
 
-import org.springframework.http.HttpStatus;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -12,15 +14,24 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/dashboard")
+@RequiredArgsConstructor
 public class DashboardController {
 
+    private final DashboardService dashboardService;
+
     @GetMapping("/timezones")
-    public ResponseEntity<Void> timezones(@RequestParam Long teamId) {
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
+    public ResponseEntity<DashboardTimezonesResponse> timezones(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @RequestParam Long teamId
+    ) {
+        return ResponseEntity.ok(dashboardService.timezones(authorizationHeader, teamId));
     }
 
     @GetMapping("/status")
-    public ResponseEntity<Void> status(@RequestParam Long proposalId) {
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
+    public ResponseEntity<DashboardStatusResponse> status(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @RequestParam Long proposalId
+    ) {
+        return ResponseEntity.ok(dashboardService.status(authorizationHeader, proposalId));
     }
 }

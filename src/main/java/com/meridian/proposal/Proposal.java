@@ -13,6 +13,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -74,4 +75,7 @@ public class Proposal {
 
     @UpdateTimestamp
     private Instant updatedAt;
+
+    @Version
+    private Long version;
 }
