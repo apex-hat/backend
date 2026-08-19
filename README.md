@@ -709,6 +709,30 @@ Content-Type: application/json
 
 ---
 
+## Message API
+
+친구 사이에만 주고받을 수 있는 1:1 메시지입니다. 별도의 대화방(Conversation) 개념 없이, 두 사용자의 `userId` 쌍으로 대화가 정해집니다.
+
+| 기능      | Method | Endpoint                     | 설명                          |
+| ------- | ------ | ------------------------------ | --------------------------- |
+| 메시지 전송  | POST   | `/api/messages`                 | `receiverId`, `content`로 전송 |
+| 대화 조회   | GET    | `/api/messages/{friendUserId}`  | 특정 친구와의 전체 대화 내역 조회         |
+
+```http
+POST /api/messages
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "receiverId": 12,
+  "content": "안녕하세요!"
+}
+```
+
+친구 사이가 아니면 `403 NOT_FRIENDS`를 반환합니다. 대화 조회 시 내가 받은 메시지 중 안 읽은 것은 자동으로 읽음 처리됩니다. 실시간 갱신은 별도 구독 없이 클라이언트가 짧은 주기로 다시 조회하는 방식(polling)을 전제로 합니다.
+
+---
+
 # 12. 전체 API Endpoint
 
 | Domain       | Method | Endpoint                               | Description |
@@ -747,6 +771,8 @@ Content-Type: application/json
 | Friend       | GET    | `/api/friends/requests`                | 받은 요청 목록    |
 | Friend       | PATCH  | `/api/friends/requests/{requestId}`    | 요청 수락/거절    |
 | Friend       | GET    | `/api/friends`                         | 친구 목록 조회    |
+| Message      | POST   | `/api/messages`                        | 메시지 전송      |
+| Message      | GET    | `/api/messages/{friendUserId}`         | 특정 친구와의 대화 조회 |
 
 ---
 
