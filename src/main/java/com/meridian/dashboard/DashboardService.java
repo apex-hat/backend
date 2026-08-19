@@ -11,6 +11,7 @@ import com.meridian.user.User;
 import com.meridian.user.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.ZoneId;
@@ -33,6 +34,12 @@ public class DashboardService {
     private final ProposalService proposalService;
     private final OpinionRepository opinionRepository;
 
+    /**
+     * team_members.user는 지연 로딩(LAZY)이라, 트랜잭션 밖에서 User 필드에 접근하면
+     * LazyInitializationException("no session")이 난다. 응답 DTO로 변환하기 전까지
+     * 세션을 열어두기 위해 조회 전용 트랜잭션으로 감싼다.
+     */
+    @Transactional(readOnly = true)
     public DashboardTimezonesResponse timezones(String authorizationHeader, Long teamId) {
         User user = userService.getCurrentUserEntity(authorizationHeader);
         Team team = findTeam(teamId);
@@ -45,6 +52,7 @@ public class DashboardService {
         return new DashboardTimezonesResponse(members);
     }
 
+    @Transactional(readOnly = true)
     public DashboardStatusResponse status(String authorizationHeader, Long proposalId) {
         User user = userService.getCurrentUserEntity(authorizationHeader);
         Proposal proposal = proposalService.getVisibleProposal(proposalId, user);
