@@ -1,11 +1,17 @@
 package com.meridian.opinion;
 
+import com.meridian.activity.ActivityAction;
+import com.meridian.activity.ActivityLogService;
 import com.meridian.common.exception.DomainException;
+import com.meridian.notification.Notification;
+import com.meridian.notification.NotificationRepository;
+import com.meridian.notification.NotificationType;
 import com.meridian.proposal.Proposal;
 import com.meridian.proposal.ProposalService;
 import com.meridian.proposal.ProposalStatus;
 import com.meridian.realtime.TeamEventPublisher;
 import com.meridian.realtime.TeamEventType;
+import com.meridian.team.Team;
 import com.meridian.team.TeamMemberRepository;
 import com.meridian.user.User;
 import com.meridian.user.UserService;
@@ -28,6 +34,8 @@ public class OpinionService {
     private final OpinionRepository opinionRepository;
     private final TeamMemberRepository teamMemberRepository;
     private final TeamEventPublisher teamEventPublisher;
+    private final NotificationRepository notificationRepository;
+    private final ActivityLogService activityLogService;
 
     @Transactional
     public OpinionResponse createOpinion(String authorizationHeader, Long proposalId, OpinionRequest request) {
@@ -63,6 +71,7 @@ public class OpinionService {
         return OpinionResponse.from(opinion);
     }
 
+    @Transactional(readOnly = true)
     public List<OpinionResponse> listOpinions(String authorizationHeader, Long proposalId) {
         User user = userService.getCurrentUserEntity(authorizationHeader);
         proposalService.getVisibleProposal(proposalId, user);
@@ -76,13 +85,22 @@ public class OpinionService {
     public OpinionResponse updateOpinion(String authorizationHeader, Long opinionId, OpinionRequest request) {
         User user = userService.getCurrentUserEntity(authorizationHeader);
         Opinion opinion = findOpinion(opinionId);
-        assertOwner(opinion, user);
+        assertOwnerOrPm(opinion, user);
+
+        User owner = opinion.getUser();
+        boolean isModeratedByPm = !owner.getId().equals(user.getId());
 
         opinion.setStance(request.stance());
         opinion.setComment(request.content());
         opinion.setAttachmentUrl(request.attachmentUrl());
 
         Proposal proposal = opinion.getProposal();
+        if (isModeratedByPm) {
+            notifyModeration(proposal, owner, NotificationType.OPINION_UPDATED_BY_PM,
+                    user.getName() + "님이 PM 권한으로 회원님의 의견을 수정했습니다.");
+            activityLogService.record(proposal.getTargetTeam(), user, owner, ActivityAction.OPINION_UPDATED_BY_PM,
+                    user.getName() + "님이 " + owner.getName() + "님의 의견을 수정했습니다.");
+        }
         teamEventPublisher.publish(TeamEventType.OPINION_UPDATED, proposal.getTargetTeam().getId(), proposal.getId());
 
         return OpinionResponse.from(opinion);
@@ -92,11 +110,33 @@ public class OpinionService {
     public void deleteOpinion(String authorizationHeader, Long opinionId) {
         User user = userService.getCurrentUserEntity(authorizationHeader);
         Opinion opinion = findOpinion(opinionId);
-        assertOwner(opinion, user);
+        assertOwnerOrPm(opinion, user);
+
+        User owner = opinion.getUser();
+        boolean isModeratedByPm = !owner.getId().equals(user.getId());
 
         Proposal proposal = opinion.getProposal();
+        Team team = proposal.getTargetTeam();
         opinionRepository.delete(opinion);
-        teamEventPublisher.publish(TeamEventType.OPINION_DELETED, proposal.getTargetTeam().getId(), proposal.getId());
+
+        if (isModeratedByPm) {
+            notifyModeration(proposal, owner, NotificationType.OPINION_DELETED_BY_PM,
+                    user.getName() + "님이 PM 권한으로 회원님의 의견을 삭제했습니다.");
+            activityLogService.record(team, user, owner, ActivityAction.OPINION_DELETED_BY_PM,
+                    user.getName() + "님이 " + owner.getName() + "님의 의견을 삭제했습니다.");
+        }
+        teamEventPublisher.publish(TeamEventType.OPINION_DELETED, team.getId(), proposal.getId());
+    }
+
+    private void notifyModeration(Proposal proposal, User owner, NotificationType type, String content) {
+        notificationRepository.save(Notification.builder()
+                .user(owner)
+                .proposal(proposal)
+                .type(type)
+                .title("PM 모더레이션")
+                .content(content)
+                .isRead(false)
+                .build());
     }
 
     private boolean allTargetMembersResponded(Proposal proposal) {
@@ -110,10 +150,16 @@ public class OpinionService {
                 .orElseThrow(() -> DomainException.notFound("OPINION_NOT_FOUND", "Opinion not found."));
     }
 
-    private void assertOwner(Opinion opinion, User user) {
-        if (!opinion.getUser().getId().equals(user.getId())) {
-            throw DomainException.forbidden("OPINION_ACCESS_DENIED", "본인의 의견만 수정/삭제할 수 있습니다.");
+    /** 본인 의견이거나, 해당 제안의 대상 팀 PM이면 수정/삭제를 허용한다(팀 진행 관리 목적의 모더레이션). */
+    private void assertOwnerOrPm(Opinion opinion, User user) {
+        if (opinion.getUser().getId().equals(user.getId())) {
+            return;
         }
+        Long teamId = opinion.getProposal().getTargetTeam().getId();
+        if (teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(teamId, user.getId(), "PM")) {
+            return;
+        }
+        throw DomainException.forbidden("OPINION_ACCESS_DENIED", "본인의 의견이거나 팀 PM만 수정/삭제할 수 있습니다.");
     }
 
     /** README §14: 의견 등록은 OPEN, IN_PROGRESS 상태에서만 허용한다. */

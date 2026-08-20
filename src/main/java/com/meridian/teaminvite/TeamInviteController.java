@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -32,6 +33,33 @@ public class TeamInviteController {
     ) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(teamInviteService.sendInvite(authorizationHeader, teamId, request.friendCode()));
+    }
+
+    @GetMapping("/api/teams/{teamId}/invites")
+    public ResponseEntity<List<TeamInviteResponse>> listForTeam(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long teamId
+    ) {
+        return ResponseEntity.ok(teamInviteService.listForTeam(authorizationHeader, teamId));
+    }
+
+    @DeleteMapping("/api/teams/{teamId}/invites/{inviteId}")
+    public ResponseEntity<Void> cancelInvite(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long teamId,
+            @PathVariable Long inviteId
+    ) {
+        teamInviteService.cancelInvite(authorizationHeader, teamId, inviteId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/api/teams/{teamId}/invites/{inviteId}/resend")
+    public ResponseEntity<TeamInviteResponse> resendInvite(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long teamId,
+            @PathVariable Long inviteId
+    ) {
+        return ResponseEntity.ok(teamInviteService.resendInvite(authorizationHeader, teamId, inviteId));
     }
 
     @GetMapping("/api/team-invites")

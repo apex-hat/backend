@@ -59,6 +59,33 @@ public class TeamController {
         return ResponseEntity.ok(teamService.updateTeam(authorizationHeader, teamId, request));
     }
 
+    @DeleteMapping("/{teamId}")
+    public ResponseEntity<Void> deleteTeam(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long teamId
+    ) {
+        teamService.deleteTeam(authorizationHeader, teamId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{teamId}/pm-transfer")
+    public ResponseEntity<TeamMemberResponse> transferPm(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long teamId,
+            @RequestBody(required = false) TeamPmTransferRequest request
+    ) {
+        return ResponseEntity.ok(teamService.transferPm(authorizationHeader, teamId, request));
+    }
+
+    @DeleteMapping("/{teamId}/leave")
+    public ResponseEntity<Void> leaveTeam(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long teamId
+    ) {
+        teamService.leaveTeam(authorizationHeader, teamId);
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/{teamId}/members")
     public ResponseEntity<List<TeamMemberResponse>> listMembers(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,

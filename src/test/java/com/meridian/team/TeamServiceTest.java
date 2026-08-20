@@ -1,6 +1,11 @@
 package com.meridian.team;
 
+import com.meridian.activity.ActivityLogRepository;
+import com.meridian.activity.ActivityLogService;
 import com.meridian.common.exception.DomainException;
+import com.meridian.proposal.ProposalService;
+import com.meridian.teaminvite.TeamInviteRepository;
+import com.meridian.teammessage.TeamMessageRepository;
 import com.meridian.user.User;
 import com.meridian.user.UserRepository;
 import com.meridian.user.UserService;
@@ -37,6 +42,21 @@ class TeamServiceTest {
 
     @Mock
     private TeamMemberRepository teamMemberRepository;
+
+    @Mock
+    private TeamInviteRepository teamInviteRepository;
+
+    @Mock
+    private TeamMessageRepository teamMessageRepository;
+
+    @Mock
+    private ProposalService proposalService;
+
+    @Mock
+    private ActivityLogService activityLogService;
+
+    @Mock
+    private ActivityLogRepository activityLogRepository;
 
     @InjectMocks
     private TeamService teamService;
@@ -204,6 +224,119 @@ class TeamServiceTest {
         teamService.removeMember(AUTHORIZATION, 10L, 2L);
 
         verify(teamMemberRepository).delete(member);
+    }
+
+    @Test
+    void deletesTeamAndCascadesRelatedDataWhenCurrentUserIsPm() {
+        User pm = user(1L, "PM");
+        Team team = team(10L, "Team A");
+        when(userService.getCurrentUserEntity(AUTHORIZATION)).thenReturn(pm);
+        when(teamRepository.findById(10L)).thenReturn(Optional.of(team));
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(true);
+
+        teamService.deleteTeam(AUTHORIZATION, 10L);
+
+        verify(proposalService).deleteAllForTeam(10L);
+        verify(teamMessageRepository).deleteAllByTeam_Id(10L);
+        verify(teamInviteRepository).deleteAllByTeam_Id(10L);
+        verify(teamMemberRepository).deleteAllByTeam_Id(10L);
+        verify(teamRepository).delete(team);
+    }
+
+    @Test
+    void rejectsTeamDeleteWhenCurrentUserIsNotPmWith403() {
+        User currentUser = user(1L, "Current");
+        Team team = team(10L, "Team A");
+        when(userService.getCurrentUserEntity(AUTHORIZATION)).thenReturn(currentUser);
+        when(teamRepository.findById(10L)).thenReturn(Optional.of(team));
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(false);
+
+        assertThatThrownBy(() -> teamService.deleteTeam(AUTHORIZATION, 10L))
+                .isInstanceOfSatisfying(DomainException.class, ex -> {
+                    assertThat(ex.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(ex.getCode()).isEqualTo("TEAM_PM_REQUIRED");
+                });
+    }
+
+    @Test
+    void transfersPmToAnotherMemberAndDemotesCurrentPm() {
+        User pm = user(1L, "PM");
+        User target = user(2L, "Member");
+        Team team = team(10L, "Team A");
+        TeamMember currentPmMembership = member(team, pm, "PM");
+        TeamMember targetMembership = member(team, target, "MEMBER");
+        when(userService.getCurrentUserEntity(AUTHORIZATION)).thenReturn(pm);
+        when(teamRepository.findById(10L)).thenReturn(Optional.of(team));
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(true);
+        when(teamMemberRepository.findByTeam_IdAndUser_Id(10L, 2L)).thenReturn(Optional.of(targetMembership));
+        when(teamMemberRepository.findByTeam_IdAndUser_Id(10L, 1L)).thenReturn(Optional.of(currentPmMembership));
+
+        TeamMemberResponse response = teamService.transferPm(AUTHORIZATION, 10L, new TeamPmTransferRequest(2L));
+
+        assertThat(response.role()).isEqualTo("PM");
+        assertThat(targetMembership.getRole()).isEqualTo("PM");
+        assertThat(currentPmMembership.getRole()).isEqualTo("MEMBER");
+    }
+
+    @Test
+    void rejectsPmTransferWhenCurrentUserIsNotPmWith403() {
+        User currentUser = user(1L, "Current");
+        Team team = team(10L, "Team A");
+        when(userService.getCurrentUserEntity(AUTHORIZATION)).thenReturn(currentUser);
+        when(teamRepository.findById(10L)).thenReturn(Optional.of(team));
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(false);
+
+        assertThatThrownBy(() -> teamService.transferPm(AUTHORIZATION, 10L, new TeamPmTransferRequest(2L)))
+                .isInstanceOfSatisfying(DomainException.class, ex -> {
+                    assertThat(ex.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(ex.getCode()).isEqualTo("TEAM_PM_REQUIRED");
+                });
+    }
+
+    @Test
+    void leavesTeamWhenCurrentUserIsRegularMember() {
+        User currentUser = user(1L, "Current");
+        Team team = team(10L, "Team A");
+        TeamMember membership = member(team, currentUser, "MEMBER");
+        when(userService.getCurrentUserEntity(AUTHORIZATION)).thenReturn(currentUser);
+        when(teamRepository.findById(10L)).thenReturn(Optional.of(team));
+        when(teamMemberRepository.findByTeam_IdAndUser_Id(10L, 1L)).thenReturn(Optional.of(membership));
+
+        teamService.leaveTeam(AUTHORIZATION, 10L);
+
+        verify(teamMemberRepository).delete(membership);
+    }
+
+    @Test
+    void allowsPmToLeaveWhenAnotherPmExists() {
+        User pm = user(1L, "PM");
+        Team team = team(10L, "Team A");
+        TeamMember membership = member(team, pm, "PM");
+        when(userService.getCurrentUserEntity(AUTHORIZATION)).thenReturn(pm);
+        when(teamRepository.findById(10L)).thenReturn(Optional.of(team));
+        when(teamMemberRepository.findByTeam_IdAndUser_Id(10L, 1L)).thenReturn(Optional.of(membership));
+        when(teamMemberRepository.countByTeam_IdAndRole(10L, "PM")).thenReturn(2L);
+
+        teamService.leaveTeam(AUTHORIZATION, 10L);
+
+        verify(teamMemberRepository).delete(membership);
+    }
+
+    @Test
+    void rejectsSolePmLeavingWith409() {
+        User pm = user(1L, "PM");
+        Team team = team(10L, "Team A");
+        TeamMember membership = member(team, pm, "PM");
+        when(userService.getCurrentUserEntity(AUTHORIZATION)).thenReturn(pm);
+        when(teamRepository.findById(10L)).thenReturn(Optional.of(team));
+        when(teamMemberRepository.findByTeam_IdAndUser_Id(10L, 1L)).thenReturn(Optional.of(membership));
+        when(teamMemberRepository.countByTeam_IdAndRole(10L, "PM")).thenReturn(1L);
+
+        assertThatThrownBy(() -> teamService.leaveTeam(AUTHORIZATION, 10L))
+                .isInstanceOfSatisfying(DomainException.class, ex -> {
+                    assertThat(ex.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(ex.getCode()).isEqualTo("TEAM_PM_MUST_TRANSFER_FIRST");
+                });
     }
 
     private User user(Long id, String name) {

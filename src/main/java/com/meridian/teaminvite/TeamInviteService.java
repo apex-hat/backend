@@ -95,6 +95,61 @@ public class TeamInviteService {
                 .toList();
     }
 
+    /** PM이 본인 팀에서 보낸 초대 현황(대기/수락/거절 포함)을 확인할 때 사용한다. */
+    @Transactional(readOnly = true)
+    public List<TeamInviteResponse> listForTeam(String authorizationHeader, Long teamId) {
+        User user = userService.getCurrentUserEntity(authorizationHeader);
+        if (!teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(teamId, user.getId(), ROLE_PM)) {
+            throw DomainException.forbidden("TEAM_PM_REQUIRED", "팀 PM만 초대 현황을 볼 수 있습니다.");
+        }
+        return teamInviteRepository.findAllByTeam_IdOrderByCreatedAtDesc(teamId).stream()
+                .map(TeamInviteResponse::from)
+                .toList();
+    }
+
+    /** 아직 응답하지 않은 초대를 PM이 취소한다. 수락/거절된 초대는 취소 대상이 아니다. */
+    @Transactional
+    public void cancelInvite(String authorizationHeader, Long teamId, Long inviteId) {
+        User user = userService.getCurrentUserEntity(authorizationHeader);
+        if (!teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(teamId, user.getId(), ROLE_PM)) {
+            throw DomainException.forbidden("TEAM_PM_REQUIRED", "팀 PM만 초대를 취소할 수 있습니다.");
+        }
+        TeamInvite invite = findPendingInviteInTeam(teamId, inviteId);
+        teamInviteRepository.delete(invite);
+    }
+
+    /** 대기 중인 초대를 받은 사람에게 알림을 한 번 더 보낸다(리마인더). 초대 자체는 그대로 유지된다. */
+    @Transactional
+    public TeamInviteResponse resendInvite(String authorizationHeader, Long teamId, Long inviteId) {
+        User user = userService.getCurrentUserEntity(authorizationHeader);
+        if (!teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(teamId, user.getId(), ROLE_PM)) {
+            throw DomainException.forbidden("TEAM_PM_REQUIRED", "팀 PM만 초대를 다시 보낼 수 있습니다.");
+        }
+        TeamInvite invite = findPendingInviteInTeam(teamId, inviteId);
+
+        notificationRepository.save(Notification.builder()
+                .user(invite.getInvitedUser())
+                .type(NotificationType.TEAM_INVITE)
+                .title("팀 초대")
+                .content(user.getName() + "님이 '" + invite.getTeam().getName() + "' 팀 초대를 다시 보냈습니다.")
+                .isRead(false)
+                .build());
+
+        return TeamInviteResponse.from(invite);
+    }
+
+    private TeamInvite findPendingInviteInTeam(Long teamId, Long inviteId) {
+        TeamInvite invite = teamInviteRepository.findById(inviteId)
+                .orElseThrow(() -> DomainException.notFound("TEAM_INVITE_NOT_FOUND", "초대를 찾을 수 없습니다."));
+        if (!invite.getTeam().getId().equals(teamId)) {
+            throw DomainException.notFound("TEAM_INVITE_NOT_FOUND", "초대를 찾을 수 없습니다.");
+        }
+        if (invite.getStatus() != TeamInviteStatus.PENDING) {
+            throw DomainException.conflict("TEAM_INVITE_ALREADY_RESOLVED", "이미 처리된 초대입니다.");
+        }
+        return invite;
+    }
+
     @Transactional
     public TeamInviteResponse respond(String authorizationHeader, Long inviteId, boolean accept) {
         User user = userService.getCurrentUserEntity(authorizationHeader);

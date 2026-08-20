@@ -1,5 +1,7 @@
 package com.meridian.proposal;
 
+import com.meridian.activity.ActivityAction;
+import com.meridian.activity.ActivityLogService;
 import com.meridian.ai.CultureAnalysis;
 import com.meridian.ai.CultureAnalysisRepository;
 import com.meridian.ai.ConsensusSummaryRepository;
@@ -50,6 +52,7 @@ public class ProposalService {
     private final ConsensusSummaryRepository consensusSummaryRepository;
     private final NotificationRepository notificationRepository;
     private final TeamEventPublisher teamEventPublisher;
+    private final ActivityLogService activityLogService;
 
     @Transactional
     public ProposalResponse createProposal(String authorizationHeader, ProposalCreateRequest request) {
@@ -125,13 +128,15 @@ public class ProposalService {
         Proposal proposal = findProposal(proposalId);
 
         assertVisible(proposal, user);
-        assertAuthor(proposal, user);
+        assertAuthorOrPm(proposal, user);
         assertActive(proposal);
         assertNoDuplicateCultures(request.targetCultures());
 
         if (!StringUtils.hasText(request.title()) || !StringUtils.hasText(request.content())) {
             throw DomainException.badRequest("INVALID_PROPOSAL", "title과 content는 필수입니다.");
         }
+
+        boolean isModeratedByPm = !proposal.getAuthor().getId().equals(user.getId());
 
         proposal.setTitle(request.title());
         proposal.setContent(request.content());
@@ -150,6 +155,13 @@ public class ProposalService {
             teamEventPublisher.publish(TeamEventType.PROPOSAL_UPDATED, proposal.getTargetTeam().getId(), proposal.getId());
         }
 
+        if (isModeratedByPm) {
+            notifyProposalModeration(proposal, NotificationType.PROPOSAL_UPDATED_BY_PM,
+                    user.getName() + "님이 PM 권한으로 회원님의 제안을 수정했습니다.");
+            activityLogService.record(proposal.getTargetTeam(), user, proposal.getAuthor(), ActivityAction.PROPOSAL_UPDATED_BY_PM,
+                    user.getName() + "님이 " + proposal.getAuthor().getName() + "님의 제안을 수정했습니다.");
+        }
+
         return ProposalResponse.from(proposal, targetCultures);
     }
 
@@ -159,11 +171,15 @@ public class ProposalService {
         Proposal proposal = findProposal(proposalId);
 
         assertVisible(proposal, user);
-        assertAuthor(proposal, user);
+        assertAuthorOrPm(proposal, user);
         assertActive(proposal);
 
         boolean wasVisibleToTeam = proposal.getStatus() != ProposalStatus.DRAFT;
         Long teamId = proposal.getTargetTeam().getId();
+        Team team = proposal.getTargetTeam();
+        User author = proposal.getAuthor();
+        String title = proposal.getTitle();
+        boolean isModeratedByPm = !author.getId().equals(user.getId());
 
         cultureAnalysisRepository.findByProposal_Id(proposal.getId())
                 .forEach(analysis -> analysis.setProposal(null));
@@ -180,6 +196,40 @@ public class ProposalService {
         if (wasVisibleToTeam) {
             teamEventPublisher.publish(TeamEventType.PROPOSAL_DELETED, teamId, proposalId);
         }
+
+        if (isModeratedByPm) {
+            // 제안 자체가 삭제되었으므로 이 알림은 proposal을 참조하지 않는다.
+            notificationRepository.save(Notification.builder()
+                    .user(author)
+                    .type(NotificationType.PROPOSAL_DELETED_BY_PM)
+                    .title("PM 모더레이션")
+                    .content(user.getName() + "님이 PM 권한으로 \"" + title + "\" 제안을 삭제했습니다.")
+                    .isRead(false)
+                    .build());
+            activityLogService.record(team, user, author, ActivityAction.PROPOSAL_DELETED_BY_PM,
+                    user.getName() + "님이 " + author.getName() + "님의 제안 \"" + title + "\"을(를) 삭제했습니다.");
+        }
+    }
+
+    /** 팀 삭제 시 해당 팀의 모든 제안과 연관 데이터를 함께 정리한다. */
+    @Transactional
+    public void deleteAllForTeam(Long teamId) {
+        List<Proposal> proposals = proposalRepository.findAllByTargetTeam_Id(teamId);
+        for (Proposal proposal : proposals) {
+            cultureAnalysisRepository.findByProposal_Id(proposal.getId())
+                    .forEach(analysis -> analysis.setProposal(null));
+            notificationRepository.deleteAllByProposal_Id(proposal.getId());
+            consensusSummaryRepository.deleteAllByProposal_Id(proposal.getId());
+            opinionRepository.deleteAllByProposal_Id(proposal.getId());
+            proposalTargetCultureRepository.deleteByProposal_Id(proposal.getId());
+        }
+        cultureAnalysisRepository.flush();
+        notificationRepository.flush();
+        consensusSummaryRepository.flush();
+        opinionRepository.flush();
+        proposalTargetCultureRepository.flush();
+        proposalRepository.deleteAll(proposals);
+        proposalRepository.flush();
     }
 
     @Transactional
@@ -242,6 +292,17 @@ public class ProposalService {
                 proposal.getAuthor().getName() + "님이 \"" + proposal.getTitle() + "\" 제안을 수정했습니다.");
     }
 
+    private void notifyProposalModeration(Proposal proposal, NotificationType type, String content) {
+        notificationRepository.save(Notification.builder()
+                .user(proposal.getAuthor())
+                .proposal(proposal)
+                .type(type)
+                .title("PM 모더레이션")
+                .content(content)
+                .isRead(false)
+                .build());
+    }
+
     private void notifyTeamMembersExceptAuthor(Proposal proposal, NotificationType type, String title, String content) {
         teamMemberRepository.findAllByTeam_Id(proposal.getTargetTeam().getId()).stream()
                 .map(TeamMember::getUser)
@@ -281,6 +342,17 @@ public class ProposalService {
         if (!proposal.getAuthor().getId().equals(user.getId())) {
             throw DomainException.forbidden("PROPOSAL_ACCESS_DENIED", "작성자만 수행할 수 있는 작업입니다.");
         }
+    }
+
+    /** 수정/삭제는 작성자 본인이거나, 해당 제안의 대상 팀 PM이면 허용한다(팀 진행 관리 목적의 모더레이션). */
+    private void assertAuthorOrPm(Proposal proposal, User user) {
+        if (proposal.getAuthor().getId().equals(user.getId())) {
+            return;
+        }
+        if (teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(proposal.getTargetTeam().getId(), user.getId(), "PM")) {
+            return;
+        }
+        throw DomainException.forbidden("PROPOSAL_ACCESS_DENIED", "작성자 또는 팀 PM만 수행할 수 있는 작업입니다.");
     }
 
     private void assertDraft(Proposal proposal, String code, String message) {

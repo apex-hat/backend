@@ -10,4 +10,8 @@ public interface TeamInviteRepository extends JpaRepository<TeamInvite, Long> {
     Optional<TeamInvite> findByTeam_IdAndInvitedUser_Id(Long teamId, Long invitedUserId);
 
     List<TeamInvite> findAllByInvitedUser_IdAndStatusOrderByCreatedAtDesc(Long invitedUserId, TeamInviteStatus status);
+
+    List<TeamInvite> findAllByTeam_IdOrderByCreatedAtDesc(Long teamId);
+
+    void deleteAllByTeam_Id(Long teamId);
 }

@@ -60,6 +60,9 @@ public class Proposal {
 
     private Instant deadline;
 
+    /** 마감 임박 알림(DEADLINE_APPROACHING)을 이미 보냈는지. null/false는 아직 안 보낸 것으로 취급한다(기존 행과의 호환을 위해 nullable). */
+    private Boolean deadlineReminderSent;
+
     @Column(columnDefinition = "TEXT")
     private String decision;
 
