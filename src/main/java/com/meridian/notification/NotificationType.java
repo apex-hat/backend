@@ -5,6 +5,7 @@ package com.meridian.notification;
  */
 public enum NotificationType {
     PROPOSAL_CREATED,
+    PROPOSAL_UPDATED,
     OPINION_REQUESTED,
     DEADLINE_APPROACHING,
     CONSENSUS_SUMMARY_COMPLETED,
