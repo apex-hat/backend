@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -47,6 +48,15 @@ public class TeamController {
             @PathVariable Long teamId
     ) {
         return ResponseEntity.ok(teamService.getTeam(authorizationHeader, teamId));
+    }
+
+    @PatchMapping("/{teamId}")
+    public ResponseEntity<TeamResponse> updateTeam(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @PathVariable Long teamId,
+            @RequestBody(required = false) TeamUpdateRequest request
+    ) {
+        return ResponseEntity.ok(teamService.updateTeam(authorizationHeader, teamId, request));
     }
 
     @GetMapping("/{teamId}/members")

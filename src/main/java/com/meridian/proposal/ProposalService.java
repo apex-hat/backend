@@ -7,9 +7,14 @@ import com.meridian.auth.AuthenticationException;
 import com.meridian.auth.FirebaseTokenVerifier;
 import com.meridian.auth.FirebaseUserClaims;
 import com.meridian.common.exception.DomainException;
+import com.meridian.notification.Notification;
 import com.meridian.notification.NotificationRepository;
+import com.meridian.notification.NotificationType;
 import com.meridian.opinion.OpinionRepository;
+import com.meridian.realtime.TeamEventPublisher;
+import com.meridian.realtime.TeamEventType;
 import com.meridian.team.Team;
+import com.meridian.team.TeamMember;
 import com.meridian.team.TeamMemberRepository;
 import com.meridian.team.TeamRepository;
 import com.meridian.user.User;
@@ -44,6 +49,7 @@ public class ProposalService {
     private final OpinionRepository opinionRepository;
     private final ConsensusSummaryRepository consensusSummaryRepository;
     private final NotificationRepository notificationRepository;
+    private final TeamEventPublisher teamEventPublisher;
 
     @Transactional
     public ProposalResponse createProposal(String authorizationHeader, ProposalCreateRequest request) {
@@ -128,6 +134,13 @@ public class ProposalService {
         proposalTargetCultureRepository.flush();
         List<String> targetCultures = saveTargetCultures(proposal, request.targetCultures());
 
+        // DRAFT는 아직 팀원에게 보이지 않으므로(assertVisible), 이미 게시되어 팀원이 볼 수 있는
+        // 상태(OPEN/IN_PROGRESS)에서 수정될 때만 알린다.
+        if (proposal.getStatus() != ProposalStatus.DRAFT) {
+            notifyTeamOfProposalUpdate(proposal);
+            teamEventPublisher.publish(TeamEventType.PROPOSAL_UPDATED, proposal.getTargetTeam().getId(), proposal.getId());
+        }
+
         return ProposalResponse.from(proposal, targetCultures);
     }
 
@@ -140,6 +153,9 @@ public class ProposalService {
         assertAuthor(proposal, user);
         assertActive(proposal);
 
+        boolean wasVisibleToTeam = proposal.getStatus() != ProposalStatus.DRAFT;
+        Long teamId = proposal.getTargetTeam().getId();
+
         cultureAnalysisRepository.findByProposal_Id(proposal.getId())
                 .forEach(analysis -> analysis.setProposal(null));
         notificationRepository.deleteAllByProposal_Id(proposal.getId());
@@ -151,6 +167,10 @@ public class ProposalService {
         opinionRepository.flush();
         proposalTargetCultureRepository.flush();
         proposalRepository.delete(proposal);
+
+        if (wasVisibleToTeam) {
+            teamEventPublisher.publish(TeamEventType.PROPOSAL_DELETED, teamId, proposalId);
+        }
     }
 
     @Transactional
@@ -163,6 +183,8 @@ public class ProposalService {
         assertDraft(proposal, "PROPOSAL_NOT_DRAFT", "DRAFT 상태의 제안만 게시할 수 있습니다.");
 
         proposal.setStatus(ProposalStatus.OPEN);
+        notifyTeamOfNewProposal(proposal);
+        teamEventPublisher.publish(TeamEventType.PROPOSAL_CREATED, proposal.getTargetTeam().getId(), proposal.getId());
 
         return ProposalResponse.from(proposal, targetCulturesOf(proposal));
     }
@@ -174,8 +196,8 @@ public class ProposalService {
 
         assertVisible(proposal, user);
         assertAuthor(proposal, user);
-        if (proposal.getStatus() != ProposalStatus.CONSENSUS_READY) {
-            throw DomainException.conflict("PROPOSAL_NOT_CONSENSUS_READY", "CONSENSUS_READY 상태의 제안만 완료 처리할 수 있습니다.");
+        if (proposal.getStatus() != ProposalStatus.CONSENSUS_COMPLETED) {
+            throw DomainException.conflict("PROPOSAL_NOT_CONSENSUS_COMPLETED", "CONSENSUS_COMPLETED 상태의 제안만 완료 처리할 수 있습니다.");
         }
 
         proposal.setDecision(request.decision());
@@ -194,6 +216,35 @@ public class ProposalService {
         Proposal proposal = findProposal(proposalId);
         assertVisible(proposal, user);
         return proposal;
+    }
+
+    /**
+     * DRAFT 제안은 팀원에게 보이지 않으므로(assertVisible) 게시(OPEN 전환) 시점에만
+     * 작성자를 제외한 팀원 전원에게 알림을 보낸다.
+     */
+    private void notifyTeamOfNewProposal(Proposal proposal) {
+        notifyTeamMembersExceptAuthor(proposal, NotificationType.PROPOSAL_CREATED, "새 제안이 등록되었습니다",
+                proposal.getAuthor().getName() + "님이 \"" + proposal.getTitle() + "\" 제안을 등록했습니다.");
+    }
+
+    /** 이미 게시되어 팀원에게 보이는 제안이 수정되었을 때 작성자를 제외한 팀원 전원에게 알림을 보낸다. */
+    private void notifyTeamOfProposalUpdate(Proposal proposal) {
+        notifyTeamMembersExceptAuthor(proposal, NotificationType.PROPOSAL_UPDATED, "제안 내용이 수정되었습니다",
+                proposal.getAuthor().getName() + "님이 \"" + proposal.getTitle() + "\" 제안을 수정했습니다.");
+    }
+
+    private void notifyTeamMembersExceptAuthor(Proposal proposal, NotificationType type, String title, String content) {
+        teamMemberRepository.findAllByTeam_Id(proposal.getTargetTeam().getId()).stream()
+                .map(TeamMember::getUser)
+                .filter(member -> !member.getId().equals(proposal.getAuthor().getId()))
+                .forEach(member -> notificationRepository.save(Notification.builder()
+                        .user(member)
+                        .proposal(proposal)
+                        .type(type)
+                        .title(title)
+                        .content(content)
+                        .isRead(false)
+                        .build()));
     }
 
     private Proposal findProposal(Long proposalId) {
@@ -229,9 +280,11 @@ public class ProposalService {
         }
     }
 
-    /** 작성 중이거나 의견을 받고 있는 제안은 작성자가 수정/삭제할 수 있다. 합의 확정 이후 기록은 잠근다. */
+    /** 작성 중이거나 의견을 받고 있는 제안은 작성자가 수정/삭제할 수 있다. 팀원 전원 응답 이후 기록은 잠근다. */
     private void assertActive(Proposal proposal) {
-        if (proposal.getStatus() == ProposalStatus.CONSENSUS_READY || proposal.getStatus() == ProposalStatus.COMPLETED) {
+        if (proposal.getStatus() == ProposalStatus.CONSENSUS_READY
+                || proposal.getStatus() == ProposalStatus.CONSENSUS_COMPLETED
+                || proposal.getStatus() == ProposalStatus.COMPLETED) {
             throw DomainException.conflict("PROPOSAL_NOT_EDITABLE", "합의가 확정된 제안은 수정/삭제할 수 없습니다.");
         }
     }

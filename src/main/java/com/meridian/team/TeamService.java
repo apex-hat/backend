@@ -61,6 +61,20 @@ public class TeamService {
         return TeamResponse.from(team);
     }
 
+    @Transactional
+    public TeamResponse updateTeam(String authorizationHeader, Long teamId, TeamUpdateRequest request) {
+        User currentUser = userService.getCurrentUserEntity(authorizationHeader);
+        Team team = findTeam(teamId);
+        requirePm(team.getId(), currentUser.getId());
+
+        if (!StringUtils.hasText(request == null ? null : request.name())) {
+            throw badRequest("TEAM_NAME_REQUIRED", "Team name is required.");
+        }
+        team.setName(request.name().trim());
+
+        return TeamResponse.from(team);
+    }
+
     @Transactional(readOnly = true)
     public List<TeamMemberResponse> listMembers(String authorizationHeader, Long teamId) {
         User currentUser = userService.getCurrentUserEntity(authorizationHeader);

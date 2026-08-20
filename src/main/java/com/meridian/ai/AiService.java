@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * README §9 AI API. 인증은 UserService를 그대로 재사용한다.
@@ -28,6 +29,22 @@ public class AiService {
     // ObjectMapper는 상태 없는(stateless) 유틸리티라 DI 없이 직접 소유한다
     // (Spring Boot의 자동 구성 ObjectMapper 빈 유무에 의존하지 않기 위함).
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    // Backend User에는 별도 preferred_language 필드가 없어(README §13.1), 프로필의 country로
+    // 언어를 추정한다. 프론트 ProfilePage.tsx의 COUNTRY_LANGUAGE 매핑과 동일하게 맞춘다.
+    private static final Map<String, String> COUNTRY_LANGUAGE = Map.of(
+            "KR", "Korean",
+            "US", "English",
+            "JP", "Japanese",
+            "IN", "English",
+            "SG", "English",
+            "GB", "English",
+            "DE", "German",
+            "FR", "English",
+            "BR", "Portuguese",
+            "AU", "English"
+    );
+    private static final String DEFAULT_LANGUAGE = "English";
 
     private final UserService userService;
     private final CultureAnalysisEngine cultureAnalysisEngine;
@@ -41,9 +58,10 @@ public class AiService {
 
     @Transactional
     public ContextAnalysisResponse contextAnalysis(String authorizationHeader, ContextAnalysisRequest request) {
-        userService.getCurrentUserEntity(authorizationHeader);
+        User user = userService.getCurrentUserEntity(authorizationHeader);
 
-        CultureAnalysisResult result = cultureAnalysisEngine.analyze(request.originalText(), request.targetCultures());
+        CultureAnalysisResult result = cultureAnalysisEngine.analyze(
+                request.originalText(), request.targetCultures(), resolveLanguage(user.getCountry()));
 
         CultureAnalysis analysis = cultureAnalysisRepository.save(CultureAnalysis.builder()
                 .originalText(request.originalText())
@@ -58,8 +76,9 @@ public class AiService {
 
     /**
      * README §9.2 AI 합의 요약. 대상 팀원 전원이 응답했거나 deadline이 지났을 때만 실행할 수 있고,
-     * 조건을 만족하면 Proposal 상태를 CONSENSUS_READY로 갱신한 뒤(OPEN/IN_PROGRESS일 때만 전진,
-     * 이미 CONSENSUS_READY 이상이면 유지) 새 합의 요약 이력을 추가한다.
+     * 실행에 성공하면 Proposal 상태를 CONSENSUS_COMPLETED(분석 완료)로 갱신한 뒤(COMPLETED로
+     * 이미 넘어갔으면 유지) 새 합의 요약 이력을 추가한다. CONSENSUS_READY(분석 가능)는 이 API가
+     * 아니라 팀원 전원 응답 시점에 OpinionService가 먼저 전이시킨다.
      */
     @Transactional
     public ConsensusSummaryResponse consensusSummary(String authorizationHeader, ConsensusSummaryRequest request) {
@@ -84,7 +103,8 @@ public class AiService {
                 proposal.getContent(),
                 opinions.stream()
                         .map(opinion -> new ConsensusOpinionInput(opinion.getStance().name(), opinion.getComment()))
-                        .toList()
+                        .toList(),
+                resolveLanguage(user.getCountry())
         );
 
         ConsensusSummary saved = consensusSummaryRepository.save(ConsensusSummary.builder()
@@ -97,8 +117,8 @@ public class AiService {
                 .recommendedActions(result.recommendedActions())
                 .build());
 
-        if (proposal.getStatus() == ProposalStatus.OPEN || proposal.getStatus() == ProposalStatus.IN_PROGRESS) {
-            proposal.setStatus(ProposalStatus.CONSENSUS_READY);
+        if (proposal.getStatus() != ProposalStatus.COMPLETED) {
+            proposal.setStatus(ProposalStatus.CONSENSUS_COMPLETED);
         }
 
         return ConsensusSummaryResponse.from(saved, OBJECT_MAPPER);
@@ -113,6 +133,10 @@ public class AiService {
         IntentAnalysisResult result = intentAnalysisEngine.analyze(request.content());
 
         return IntentAnalysisResponse.from(request.content(), result);
+    }
+
+    private String resolveLanguage(String country) {
+        return country == null ? DEFAULT_LANGUAGE : COUNTRY_LANGUAGE.getOrDefault(country, DEFAULT_LANGUAGE);
     }
 
     private String writeJson(Object value) {

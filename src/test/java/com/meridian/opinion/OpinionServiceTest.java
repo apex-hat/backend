@@ -5,7 +5,10 @@ import com.meridian.common.exception.DomainException;
 import com.meridian.proposal.Proposal;
 import com.meridian.proposal.ProposalService;
 import com.meridian.proposal.ProposalStatus;
+import com.meridian.realtime.TeamEventPublisher;
 import com.meridian.team.Team;
+import com.meridian.team.TeamMember;
+import com.meridian.team.TeamMemberRepository;
 import com.meridian.user.User;
 import com.meridian.user.UserService;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +37,10 @@ class OpinionServiceTest {
     private ProposalService proposalService;
     @Mock
     private OpinionRepository opinionRepository;
+    @Mock
+    private TeamMemberRepository teamMemberRepository;
+    @Mock
+    private TeamEventPublisher teamEventPublisher;
 
     private OpinionService opinionService;
 
@@ -44,7 +51,7 @@ class OpinionServiceTest {
 
     @BeforeEach
     void setUp() {
-        opinionService = new OpinionService(userService, proposalService, opinionRepository);
+        opinionService = new OpinionService(userService, proposalService, opinionRepository, teamMemberRepository, teamEventPublisher);
 
         author = User.builder().id(1L).firebaseUid("author-uid").build();
         member = User.builder().id(2L).firebaseUid("member-uid").build();
@@ -64,6 +71,9 @@ class OpinionServiceTest {
             opinion.setId(1000L);
             return opinion;
         });
+        when(teamMemberRepository.findAllByTeam_Id(10L)).thenReturn(twoMemberTeam());
+        when(opinionRepository.findAllByProposal_Id(100L)).thenReturn(List.of(
+                Opinion.builder().id(1000L).proposal(proposal).user(member).stance(OpinionStance.AGREE).build()));
 
         OpinionRequest request = new OpinionRequest(OpinionStance.AGREE, "동의합니다.", null);
         OpinionResponse response = opinionService.createOpinion(AUTH_HEADER, 100L, request);
@@ -79,11 +89,37 @@ class OpinionServiceTest {
         when(proposalService.getVisibleProposal(100L, member)).thenReturn(proposal);
         when(opinionRepository.existsByProposal_IdAndUser_Id(100L, 2L)).thenReturn(false);
         when(opinionRepository.save(any(Opinion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(teamMemberRepository.findAllByTeam_Id(10L)).thenReturn(twoMemberTeam());
+        when(opinionRepository.findAllByProposal_Id(100L)).thenReturn(List.of(
+                Opinion.builder().id(1L).proposal(proposal).user(member).stance(OpinionStance.DISAGREE).build()));
 
         OpinionRequest request = new OpinionRequest(OpinionStance.DISAGREE, "반대합니다.", null);
         opinionService.createOpinion(AUTH_HEADER, 100L, request);
 
         assertThat(proposal.getStatus()).isEqualTo(ProposalStatus.IN_PROGRESS);
+    }
+
+    @Test
+    void transitionsToConsensusReadyWhenAllTargetMembersHaveResponded() {
+        proposal.setStatus(ProposalStatus.IN_PROGRESS);
+        when(proposalService.getVisibleProposal(100L, member)).thenReturn(proposal);
+        when(opinionRepository.existsByProposal_IdAndUser_Id(100L, 2L)).thenReturn(false);
+        when(opinionRepository.save(any(Opinion.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(teamMemberRepository.findAllByTeam_Id(10L)).thenReturn(twoMemberTeam());
+        when(opinionRepository.findAllByProposal_Id(100L)).thenReturn(List.of(
+                Opinion.builder().id(1L).proposal(proposal).user(author).stance(OpinionStance.AGREE).build(),
+                Opinion.builder().id(2L).proposal(proposal).user(member).stance(OpinionStance.DISAGREE).build()));
+
+        OpinionRequest request = new OpinionRequest(OpinionStance.DISAGREE, "반대합니다.", null);
+        opinionService.createOpinion(AUTH_HEADER, 100L, request);
+
+        assertThat(proposal.getStatus()).isEqualTo(ProposalStatus.CONSENSUS_READY);
+    }
+
+    private List<TeamMember> twoMemberTeam() {
+        return List.of(
+                TeamMember.builder().team(team).user(author).role("PM").build(),
+                TeamMember.builder().team(team).user(member).role("MEMBER").build());
     }
 
     @Test

@@ -4,6 +4,9 @@ import com.meridian.common.exception.DomainException;
 import com.meridian.proposal.Proposal;
 import com.meridian.proposal.ProposalService;
 import com.meridian.proposal.ProposalStatus;
+import com.meridian.realtime.TeamEventPublisher;
+import com.meridian.realtime.TeamEventType;
+import com.meridian.team.TeamMemberRepository;
 import com.meridian.user.User;
 import com.meridian.user.UserService;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +26,8 @@ public class OpinionService {
     private final UserService userService;
     private final ProposalService proposalService;
     private final OpinionRepository opinionRepository;
+    private final TeamMemberRepository teamMemberRepository;
+    private final TeamEventPublisher teamEventPublisher;
 
     @Transactional
     public OpinionResponse createOpinion(String authorizationHeader, Long proposalId, OpinionRequest request) {
@@ -48,6 +53,13 @@ public class OpinionService {
             proposal.setStatus(ProposalStatus.IN_PROGRESS);
         }
 
+        // README §14: 대상 팀원 전원이 의견을 등록하면 IN_PROGRESS -> CONSENSUS_READY(분석 가능)로 자동 전이한다.
+        if (proposal.getStatus() == ProposalStatus.IN_PROGRESS && allTargetMembersResponded(proposal)) {
+            proposal.setStatus(ProposalStatus.CONSENSUS_READY);
+        }
+
+        teamEventPublisher.publish(TeamEventType.OPINION_CREATED, proposal.getTargetTeam().getId(), proposal.getId());
+
         return OpinionResponse.from(opinion);
     }
 
@@ -70,6 +82,9 @@ public class OpinionService {
         opinion.setComment(request.content());
         opinion.setAttachmentUrl(request.attachmentUrl());
 
+        Proposal proposal = opinion.getProposal();
+        teamEventPublisher.publish(TeamEventType.OPINION_UPDATED, proposal.getTargetTeam().getId(), proposal.getId());
+
         return OpinionResponse.from(opinion);
     }
 
@@ -79,7 +94,15 @@ public class OpinionService {
         Opinion opinion = findOpinion(opinionId);
         assertOwner(opinion, user);
 
+        Proposal proposal = opinion.getProposal();
         opinionRepository.delete(opinion);
+        teamEventPublisher.publish(TeamEventType.OPINION_DELETED, proposal.getTargetTeam().getId(), proposal.getId());
+    }
+
+    private boolean allTargetMembersResponded(Proposal proposal) {
+        int totalMembers = teamMemberRepository.findAllByTeam_Id(proposal.getTargetTeam().getId()).size();
+        int respondedMembers = opinionRepository.findAllByProposal_Id(proposal.getId()).size();
+        return totalMembers > 0 && respondedMembers >= totalMembers;
     }
 
     private Opinion findOpinion(Long opinionId) {

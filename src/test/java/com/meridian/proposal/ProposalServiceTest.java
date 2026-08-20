@@ -6,9 +6,14 @@ import com.meridian.auth.AuthenticationException;
 import com.meridian.auth.FirebaseTokenVerifier;
 import com.meridian.auth.FirebaseUserClaims;
 import com.meridian.common.exception.DomainException;
+import com.meridian.notification.Notification;
 import com.meridian.notification.NotificationRepository;
+import com.meridian.notification.NotificationType;
 import com.meridian.opinion.OpinionRepository;
+import com.meridian.realtime.TeamEventPublisher;
 import com.meridian.team.Team;
+import com.meridian.team.TeamMember;
+import com.meridian.team.TeamMemberId;
 import com.meridian.team.TeamMemberRepository;
 import com.meridian.team.TeamRepository;
 import com.meridian.user.User;
@@ -16,6 +21,7 @@ import com.meridian.user.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -27,6 +33,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -54,6 +62,8 @@ class ProposalServiceTest {
     private ConsensusSummaryRepository consensusSummaryRepository;
     @Mock
     private NotificationRepository notificationRepository;
+    @Mock
+    private TeamEventPublisher teamEventPublisher;
 
     private ProposalService proposalService;
 
@@ -64,7 +74,7 @@ class ProposalServiceTest {
     void setUp() {
         proposalService = new ProposalService(firebaseTokenVerifier, userRepository, teamRepository,
                 teamMemberRepository, proposalRepository, proposalTargetCultureRepository, cultureAnalysisRepository,
-                opinionRepository, consensusSummaryRepository, notificationRepository);
+                opinionRepository, consensusSummaryRepository, notificationRepository, teamEventPublisher);
 
         author = User.builder().id(1L).firebaseUid("firebase-uid").email("author@example.com").build();
         team = Team.builder().id(10L).name("Design Team").build();
@@ -212,13 +222,36 @@ class ProposalServiceTest {
     void updateProposalAllowsPublishedActiveStatus() {
         Proposal proposal = draftProposal();
         proposal.setStatus(ProposalStatus.OPEN);
+        User teammate = User.builder().id(2L).name("Teammate").build();
         when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+        when(teamMemberRepository.findAllByTeam_Id(10L)).thenReturn(List.of(
+                TeamMember.builder().id(new TeamMemberId(10L, 1L)).team(team).user(author).role("PM").build(),
+                TeamMember.builder().id(new TeamMemberId(10L, 2L)).team(team).user(teammate).role("MEMBER").build()));
 
         ProposalUpdateRequest request = new ProposalUpdateRequest("New", "New content", List.of(), null);
 
         ProposalResponse response = proposalService.updateProposal(AUTH_HEADER, 100L, request);
 
         assertThat(response.title()).isEqualTo("New");
+
+        // 이미 게시되어 팀원에게 보이는 제안이 수정되었으므로, 작성자를 제외한 팀원에게 알림을 보낸다.
+        ArgumentCaptor<Notification> notificationCaptor = ArgumentCaptor.forClass(Notification.class);
+        verify(notificationRepository).save(notificationCaptor.capture());
+        assertThat(notificationCaptor.getValue().getUser()).isEqualTo(teammate);
+        assertThat(notificationCaptor.getValue().getType()).isEqualTo(NotificationType.PROPOSAL_UPDATED);
+    }
+
+    @Test
+    void updateProposalDoesNotNotifyWhileStillDraft() {
+        Proposal proposal = draftProposal();
+        when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+
+        ProposalUpdateRequest request = new ProposalUpdateRequest("New", "New content", List.of(), null);
+
+        proposalService.updateProposal(AUTH_HEADER, 100L, request);
+
+        // DRAFT는 팀원에게 보이지 않으므로 알림을 보내지 않는다.
+        verify(notificationRepository, never()).save(any(Notification.class));
     }
 
     @Test
@@ -239,13 +272,25 @@ class ProposalServiceTest {
     @Test
     void publishProposalTransitionsDraftToOpen() {
         Proposal proposal = draftProposal();
+        User teammate = User.builder().id(2L).name("Teammate").build();
         when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
         when(proposalTargetCultureRepository.findByProposal_Id(100L)).thenReturn(List.of());
+        when(teamMemberRepository.findAllByTeam_Id(10L)).thenReturn(List.of(
+                TeamMember.builder().id(new TeamMemberId(10L, 1L)).team(team).user(author).role("PM").build(),
+                TeamMember.builder().id(new TeamMemberId(10L, 2L)).team(team).user(teammate).role("MEMBER").build()));
 
         ProposalResponse response = proposalService.publishProposal(AUTH_HEADER, 100L);
 
         assertThat(response.status()).isEqualTo(ProposalStatus.OPEN);
         assertThat(proposal.getStatus()).isEqualTo(ProposalStatus.OPEN);
+
+        // 작성자 본인에게는 알림을 보내지 않고, 나머지 팀원에게만 PROPOSAL_CREATED 알림을 보낸다.
+        ArgumentCaptor<Notification> notificationCaptor = ArgumentCaptor.forClass(Notification.class);
+        verify(notificationRepository).save(notificationCaptor.capture());
+        Notification notification = notificationCaptor.getValue();
+        assertThat(notification.getUser()).isEqualTo(teammate);
+        assertThat(notification.getType()).isEqualTo(NotificationType.PROPOSAL_CREATED);
+        assertThat(notification.getProposal()).isEqualTo(proposal);
     }
 
     @Test
@@ -303,9 +348,9 @@ class ProposalServiceTest {
     }
 
     @Test
-    void completeProposalTransitionsConsensusReadyToCompletedWithDecision() {
+    void completeProposalTransitionsConsensusCompletedToCompletedWithDecision() {
         Proposal proposal = draftProposal();
-        proposal.setStatus(ProposalStatus.CONSENSUS_READY);
+        proposal.setStatus(ProposalStatus.CONSENSUS_COMPLETED);
         when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
         when(proposalTargetCultureRepository.findByProposal_Id(100L)).thenReturn(List.of());
 
@@ -319,7 +364,7 @@ class ProposalServiceTest {
     }
 
     @Test
-    void completeProposalRejectsNonConsensusReadyStatus() {
+    void completeProposalRejectsNonConsensusCompletedStatus() {
         Proposal proposal = draftProposal();
         proposal.setStatus(ProposalStatus.OPEN);
         when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
@@ -329,7 +374,7 @@ class ProposalServiceTest {
         assertThatThrownBy(() -> proposalService.completeProposal(AUTH_HEADER, 100L, request))
                 .isInstanceOf(DomainException.class)
                 .extracting(ex -> ((DomainException) ex).getCode())
-                .isEqualTo("PROPOSAL_NOT_CONSENSUS_READY");
+                .isEqualTo("PROPOSAL_NOT_CONSENSUS_COMPLETED");
     }
 
     @Test
