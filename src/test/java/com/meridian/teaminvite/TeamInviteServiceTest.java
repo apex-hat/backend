@@ -131,7 +131,7 @@ class TeamInviteServiceTest {
     }
 
     @Test
-    void acceptingInviteCreatesTeamMembership() {
+    void acceptingInviteCreatesTeamMembershipAndNotifiesInviter() {
         when(userService.getCurrentUserEntity(AUTH_HEADER)).thenReturn(invitee);
         TeamInvite pending = TeamInvite.builder().id(5L).team(team).invitedUser(invitee).invitedBy(pm).status(TeamInviteStatus.PENDING).build();
         when(teamInviteRepository.findById(5L)).thenReturn(Optional.of(pending));
@@ -142,10 +142,16 @@ class TeamInviteServiceTest {
         assertThat(response.status()).isEqualTo(TeamInviteStatus.ACCEPTED);
         assertThat(pending.getRespondedAt()).isNotNull();
         verify(teamMemberRepository).save(any());
+
+        ArgumentCaptor<Notification> notificationCaptor = ArgumentCaptor.forClass(Notification.class);
+        verify(notificationRepository).save(notificationCaptor.capture());
+        assertThat(notificationCaptor.getValue().getUser()).isEqualTo(pm);
+        assertThat(notificationCaptor.getValue().getType()).isEqualTo(NotificationType.TEAM_INVITE);
+        assertThat(notificationCaptor.getValue().getContent()).contains("수락");
     }
 
     @Test
-    void rejectingInviteDoesNotCreateTeamMembership() {
+    void rejectingInviteDoesNotCreateTeamMembershipButNotifiesInviter() {
         when(userService.getCurrentUserEntity(AUTH_HEADER)).thenReturn(invitee);
         TeamInvite pending = TeamInvite.builder().id(5L).team(team).invitedUser(invitee).invitedBy(pm).status(TeamInviteStatus.PENDING).build();
         when(teamInviteRepository.findById(5L)).thenReturn(Optional.of(pending));
@@ -154,6 +160,11 @@ class TeamInviteServiceTest {
 
         assertThat(response.status()).isEqualTo(TeamInviteStatus.REJECTED);
         verify(teamMemberRepository, never()).save(any());
+
+        ArgumentCaptor<Notification> notificationCaptor = ArgumentCaptor.forClass(Notification.class);
+        verify(notificationRepository).save(notificationCaptor.capture());
+        assertThat(notificationCaptor.getValue().getUser()).isEqualTo(pm);
+        assertThat(notificationCaptor.getValue().getContent()).contains("거절");
     }
 
     @Test

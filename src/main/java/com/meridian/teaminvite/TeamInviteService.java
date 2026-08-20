@@ -110,6 +110,16 @@ public class TeamInviteService {
                     .build());
         }
 
+        notificationRepository.save(Notification.builder()
+                .user(invite.getInvitedBy())
+                .type(NotificationType.TEAM_INVITE)
+                .title("팀 초대 응답")
+                .content(accept
+                        ? user.getName() + "님이 '" + invite.getTeam().getName() + "' 팀 초대를 수락했습니다."
+                        : user.getName() + "님이 '" + invite.getTeam().getName() + "' 팀 초대를 거절했습니다.")
+                .isRead(false)
+                .build());
+
         return TeamInviteResponse.from(invite);
     }
 }
