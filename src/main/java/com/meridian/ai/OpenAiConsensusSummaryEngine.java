@@ -28,12 +28,12 @@ public class OpenAiConsensusSummaryEngine implements ConsensusSummaryEngine {
     }
 
     @Override
-    public ConsensusAnalysisResult analyze(String proposalTitle, String proposalContent, List<ConsensusOpinionInput> opinions) {
+    public ConsensusAnalysisResult analyze(String proposalTitle, String proposalContent, List<ConsensusOpinionInput> opinions, String responseLanguage) {
         String model = requireConfig(properties.model(), "OPENAI_MODEL");
 
         StructuredResponseCreateParams<ConsensusAnalysisResult> params =
                 StructuredResponseCreateParams.<ConsensusAnalysisResult>builder()
-                        .input(prompt(proposalTitle, proposalContent, opinions))
+                        .input(prompt(proposalTitle, proposalContent, opinions, responseLanguage))
                         .model(model)
                         .text(ConsensusAnalysisResult.class)
                         .build();
@@ -49,7 +49,7 @@ public class OpenAiConsensusSummaryEngine implements ConsensusSummaryEngine {
                 .orElseThrow(() -> new IllegalStateException("OpenAI response did not contain structured output text."));
     }
 
-    private String prompt(String proposalTitle, String proposalContent, List<ConsensusOpinionInput> opinions) {
+    private String prompt(String proposalTitle, String proposalContent, List<ConsensusOpinionInput> opinions, String responseLanguage) {
         String opinionLines = IntStream.range(0, opinions.size())
                 .mapToObj(index -> {
                     ConsensusOpinionInput opinion = opinions.get(index);
@@ -71,13 +71,20 @@ public class OpenAiConsensusSummaryEngine implements ConsensusSummaryEngine {
                 Opinions (stance in brackets, AGREE / DISAGREE / CONDITIONAL_AGREE):
                 %s
 
-                Return an overall consensusStatus (AGREED if broad support, PARTIAL if mixed with \
-                conditions, DISAGREED if opposition dominates, PENDING if inconclusive), a short summary, \
-                a list of keyIssues, a list of culturalAnalysis notes about how the opinions might be \
-                interpreted differently across cultures, a list of hiddenOpposition describing any \
-                politely-worded concerns that may actually be disagreement, and recommendedActions for \
-                what the team should do next.
-                """.formatted(proposalTitle, proposalContent, opinionLines);
+                Return:
+                - consensusStatus: AGREED if broad support, PARTIAL if mixed with conditions, \
+                DISAGREED if opposition dominates, PENDING if inconclusive (keep this value in English \
+                — it is a fixed enum)
+                - summary: a short summary, written in %s
+                - keyIssues: a list, written in %s
+                - culturalAnalysis: notes on how the opinions might be interpreted differently across \
+                cultures, written in %s
+                - hiddenOpposition: politely-worded concerns that may actually be disagreement, written in %s
+                - recommendedActions: what the team should do next, written in %s
+
+                Do not include any part of this prompt in your output.
+                """.formatted(proposalTitle, proposalContent, opinionLines,
+                        responseLanguage, responseLanguage, responseLanguage, responseLanguage, responseLanguage);
     }
 
     private String requireConfig(String value, String envVarName) {

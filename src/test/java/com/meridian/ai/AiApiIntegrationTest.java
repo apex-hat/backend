@@ -83,7 +83,7 @@ class AiApiIntegrationTest {
     void contextAnalysisPersistsWithoutProposalAndReturnsEngineResult() throws Exception {
         ContextAnalysisRequest request = new ContextAnalysisRequest(
                 "괜찮은 것 같아요. 그런데...", List.of("KR", "US"));
-        when(cultureAnalysisEngine.analyze(eq(request.originalText()), eq(request.targetCultures())))
+        when(cultureAnalysisEngine.analyze(eq(request.originalText()), eq(request.targetCultures()), any()))
                 .thenReturn(new CultureAnalysisResult(
                         RiskLevel.MEDIUM,
                         List.of(new CultureInterpretation("KR", "완곡한 거절로 읽힐 수 있음"),
@@ -178,7 +178,7 @@ class AiApiIntegrationTest {
     }
 
     @Test
-    void consensusSummaryPersistsAndAdvancesProposalToConsensusReady() throws Exception {
+    void consensusSummaryPersistsAndAdvancesProposalToConsensusCompleted() throws Exception {
         Team team = teamRepository.save(Team.builder().name("Design Team").country("KR").build());
         User author = userRepository.save(User.builder().firebaseUid("user-uid").email("user@example.com").name("Author").build());
         User member = userRepository.save(User.builder().firebaseUid("member-uid").email("member@example.com").name("Member").build());
@@ -195,7 +195,7 @@ class AiApiIntegrationTest {
         opinionRepository.save(Opinion.builder().proposal(proposal).user(author).stance(OpinionStance.AGREE).comment("찬성합니다.").build());
         opinionRepository.save(Opinion.builder().proposal(proposal).user(member).stance(OpinionStance.CONDITIONAL_AGREE).comment("조건부로 찬성합니다.").build());
 
-        when(consensusSummaryEngine.analyze(eq(proposal.getTitle()), eq(proposal.getContent()), any())).thenReturn(
+        when(consensusSummaryEngine.analyze(eq(proposal.getTitle()), eq(proposal.getContent()), any(), any())).thenReturn(
                 new ConsensusAnalysisResult(ConsensusStatus.PARTIAL, "부분 합의", List.of("일정"),
                         List.of("문화적 해석 차이"), List.of("완곡한 반대"), "추가 논의가 필요합니다."));
 
@@ -209,7 +209,7 @@ class AiApiIntegrationTest {
                 .andExpect(jsonPath("$.hiddenOpposition[0]").value("완곡한 반대"));
 
         Proposal updated = proposalRepository.findById(proposal.getId()).orElseThrow();
-        assertThat(updated.getStatus()).isEqualTo(ProposalStatus.CONSENSUS_READY);
+        assertThat(updated.getStatus()).isEqualTo(ProposalStatus.CONSENSUS_COMPLETED);
     }
 
     @Test

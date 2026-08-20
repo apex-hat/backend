@@ -9,5 +9,5 @@ import java.util.List;
  */
 public interface CultureAnalysisEngine {
 
-    CultureAnalysisResult analyze(String originalText, List<String> targetCultures);
+    CultureAnalysisResult analyze(String originalText, List<String> targetCultures, String responseLanguage);
 }

@@ -16,6 +16,7 @@ import com.meridian.user.UserService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -27,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -77,7 +79,7 @@ class AiServiceTest {
                         new CultureInterpretation("US", "기본적으로 긍정적인 의견으로 해석될 가능성이 있음")),
                 List.of("괜찮은 것 같아요"),
                 "전체적으로 긍정적이지만 일정 부분 수정이 필요하다고 생각합니다.");
-        when(cultureAnalysisEngine.analyze("괜찮은 것 같아요. 그런데...", List.of("KR", "US"))).thenReturn(engineResult);
+        when(cultureAnalysisEngine.analyze("괜찮은 것 같아요. 그런데...", List.of("KR", "US"), "English")).thenReturn(engineResult);
         when(cultureAnalysisRepository.save(any(CultureAnalysis.class))).thenAnswer(invocation -> {
             CultureAnalysis analysis = invocation.getArgument(0);
             analysis.setId(1L);
@@ -99,7 +101,7 @@ class AiServiceTest {
     @Test
     void savesProposalIdAsNullForPreRegistrationAnalysis() {
         ContextAnalysisRequest request = new ContextAnalysisRequest("원문", List.of("KR"));
-        when(cultureAnalysisEngine.analyze("원문", List.of("KR")))
+        when(cultureAnalysisEngine.analyze("원문", List.of("KR"), "English"))
                 .thenReturn(new CultureAnalysisResult(RiskLevel.LOW, List.of(), List.of(), "원문"));
         when(cultureAnalysisRepository.save(any(CultureAnalysis.class))).thenAnswer(invocation -> {
             CultureAnalysis analysis = invocation.getArgument(0);
@@ -147,7 +149,7 @@ class AiServiceTest {
     }
 
     @Test
-    void consensusSummaryPersistsResultAndAdvancesStatusWhenAllMembersResponded() {
+    void consensusSummaryPersistsResultAndAdvancesStatusToConsensusCompleted() {
         Proposal proposal = openProposal(null);
         when(proposalService.getVisibleProposal(100L, author)).thenReturn(proposal);
         when(opinionRepository.findAllByProposal_Id(proposal.getId())).thenReturn(List.of(
@@ -160,7 +162,7 @@ class AiServiceTest {
         ConsensusAnalysisResult engineResult = new ConsensusAnalysisResult(
                 ConsensusStatus.PARTIAL, "부분 합의", List.of("일정"), List.of("문화적 해석 차이"),
                 List.of("완곡한 반대"), "추가 논의 필요");
-        when(consensusSummaryEngine.analyze(any(), any(), any())).thenReturn(engineResult);
+        when(consensusSummaryEngine.analyze(any(), any(), any(), any())).thenReturn(engineResult);
         when(consensusSummaryRepository.save(any(ConsensusSummary.class))).thenAnswer(invocation -> {
             ConsensusSummary summary = invocation.getArgument(0);
             summary.setId(1L);
@@ -171,7 +173,31 @@ class AiServiceTest {
 
         assertThat(response.consensusStatus()).isEqualTo(ConsensusStatus.PARTIAL);
         assertThat(response.keyIssues()).containsExactly("일정");
-        assertThat(proposal.getStatus()).isEqualTo(ProposalStatus.CONSENSUS_READY);
+        assertThat(proposal.getStatus()).isEqualTo(ProposalStatus.CONSENSUS_COMPLETED);
+
+        ArgumentCaptor<String> languageCaptor = ArgumentCaptor.forClass(String.class);
+        verify(consensusSummaryEngine).analyze(any(), any(), any(), languageCaptor.capture());
+        assertThat(languageCaptor.getValue()).isEqualTo("English");
+    }
+
+    @Test
+    void consensusSummaryRequestsResponseInRequesterCountryLanguage() {
+        author.setCountry("KR");
+        Proposal proposal = openProposal(null);
+        when(proposalService.getVisibleProposal(100L, author)).thenReturn(proposal);
+        when(opinionRepository.findAllByProposal_Id(proposal.getId())).thenReturn(List.of(
+                opinion(proposal, OpinionStance.AGREE, "찬성합니다.")));
+        when(teamMemberRepository.findAllByTeam_Id(10L)).thenReturn(List.of(
+                TeamMember.builder().team(team).user(author).role("PM").build()));
+        when(consensusSummaryEngine.analyze(any(), any(), any(), any())).thenReturn(
+                new ConsensusAnalysisResult(ConsensusStatus.AGREED, "합의됨", List.of(), List.of(), List.of(), "없음"));
+        when(consensusSummaryRepository.save(any(ConsensusSummary.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        aiService.consensusSummary(AUTH_HEADER, new ConsensusSummaryRequest(100L));
+
+        ArgumentCaptor<String> languageCaptor = ArgumentCaptor.forClass(String.class);
+        verify(consensusSummaryEngine).analyze(any(), any(), any(), languageCaptor.capture());
+        assertThat(languageCaptor.getValue()).isEqualTo("Korean");
     }
 
     @Test
@@ -184,7 +210,7 @@ class AiServiceTest {
                 TeamMember.builder().team(team).user(author).role("PM").build(),
                 TeamMember.builder().team(team).user(User.builder().id(2L).build()).role("MEMBER").build(),
                 TeamMember.builder().team(team).user(User.builder().id(3L).build()).role("MEMBER").build()));
-        when(consensusSummaryEngine.analyze(any(), any(), any())).thenReturn(
+        when(consensusSummaryEngine.analyze(any(), any(), any(), any())).thenReturn(
                 new ConsensusAnalysisResult(ConsensusStatus.DISAGREED, "이견 있음", List.of(), List.of(), List.of(), "재논의 필요"));
         when(consensusSummaryRepository.save(any(ConsensusSummary.class))).thenAnswer(invocation -> invocation.getArgument(0));
 

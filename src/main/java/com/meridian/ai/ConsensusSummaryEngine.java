@@ -8,5 +8,5 @@ import java.util.List;
  */
 public interface ConsensusSummaryEngine {
 
-    ConsensusAnalysisResult analyze(String proposalTitle, String proposalContent, List<ConsensusOpinionInput> opinions);
+    ConsensusAnalysisResult analyze(String proposalTitle, String proposalContent, List<ConsensusOpinionInput> opinions, String responseLanguage);
 }

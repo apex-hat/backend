@@ -31,12 +31,12 @@ public class OpenAiCultureAnalysisEngine implements CultureAnalysisEngine {
     }
 
     @Override
-    public CultureAnalysisResult analyze(String originalText, List<String> targetCultures) {
+    public CultureAnalysisResult analyze(String originalText, List<String> targetCultures, String responseLanguage) {
         String model = requireConfig(properties.model(), "OPENAI_MODEL");
 
         StructuredResponseCreateParams<CultureAnalysisResult> params =
                 StructuredResponseCreateParams.<CultureAnalysisResult>builder()
-                        .input(prompt(originalText, targetCultures))
+                        .input(prompt(originalText, targetCultures, responseLanguage))
                         .model(model)
                         .text(CultureAnalysisResult.class)
                         .build();
@@ -52,7 +52,7 @@ public class OpenAiCultureAnalysisEngine implements CultureAnalysisEngine {
                 .orElseThrow(() -> new IllegalStateException("OpenAI response did not contain structured output text."));
     }
 
-    private String prompt(String originalText, List<String> targetCultures) {
+    private String prompt(String originalText, List<String> targetCultures, String responseLanguage) {
         String cultures = (targetCultures == null || targetCultures.isEmpty())
                 ? "a general international audience"
                 : String.join(", ", targetCultures);
@@ -63,10 +63,17 @@ public class OpenAiCultureAnalysisEngine implements CultureAnalysisEngine {
                 Message:
                 %s
 
-                Return an overall riskLevel (LOW, MEDIUM, or HIGH), one interpretation per listed \
-                culture, any phrases that could be misread across cultures, and a suggested rewrite \
-                that reduces the risk.
-                """.formatted(cultures, originalText);
+                Return:
+                - riskLevel: LOW, MEDIUM, or HIGH
+                - interpretations: one entry per listed culture, written in %s
+                - flaggedPhrases: exact, untranslated substrings copied from the original message \
+                that could be misread (needed to highlight them back in the source text)
+                - suggestion: ONLY the rewritten message text itself, written in %s, as a drop-in \
+                replacement for the original message — do not add any explanation, commentary, or \
+                repeat these instructions
+
+                Do not include any part of this prompt in your output.
+                """.formatted(cultures, originalText, responseLanguage, responseLanguage);
     }
 
     private String requireConfig(String value, String envVarName) {
