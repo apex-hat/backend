@@ -85,22 +85,31 @@ public class ProposalService {
         return ProposalResponse.from(proposal, targetCultures);
     }
 
-    public List<ProposalResponse> listProposals(String authorizationHeader) {
+    @Transactional(readOnly = true)
+    public List<ProposalResponse> listProposals(String authorizationHeader, Long teamId) {
         User user = resolveCurrentUser(authorizationHeader);
 
-        List<Long> teamIds = teamMemberRepository.findAllByUser_Id(user.getId()).stream()
-                .map(member -> member.getTeam().getId())
-                .toList();
-
-        List<Proposal> proposals = teamIds.isEmpty()
-                ? proposalRepository.findByAuthor_Id(user.getId())
-                : proposalRepository.findVisibleToUser(user.getId(), teamIds);
+        List<Proposal> proposals;
+        if (teamId != null) {
+            if (!teamMemberRepository.existsByTeam_IdAndUser_Id(teamId, user.getId())) {
+                throw DomainException.forbidden("TEAM_ACCESS_DENIED", "해당 팀에 소속된 사용자만 제안을 조회할 수 있습니다.");
+            }
+            proposals = proposalRepository.findVisibleToUserInTeam(user.getId(), teamId);
+        } else {
+            List<Long> teamIds = teamMemberRepository.findAllByUser_Id(user.getId()).stream()
+                    .map(member -> member.getTeam().getId())
+                    .toList();
+            proposals = teamIds.isEmpty()
+                    ? proposalRepository.findByAuthor_Id(user.getId())
+                    : proposalRepository.findVisibleToUser(user.getId(), teamIds);
+        }
 
         return proposals.stream()
                 .map(proposal -> ProposalResponse.from(proposal, targetCulturesOf(proposal)))
                 .toList();
     }
 
+    @Transactional(readOnly = true)
     public ProposalResponse getProposal(String authorizationHeader, Long proposalId) {
         User user = resolveCurrentUser(authorizationHeader);
         Proposal proposal = findProposal(proposalId);

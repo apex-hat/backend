@@ -57,11 +57,22 @@ class ProposalControllerTest {
 
     @Test
     void listsProposals() throws Exception {
-        when(proposalService.listProposals("Bearer id-token")).thenReturn(List.of(sampleResponse()));
+        when(proposalService.listProposals("Bearer id-token", null)).thenReturn(List.of(sampleResponse()));
 
         mockMvc.perform(get("/api/proposals").header(HttpHeaders.AUTHORIZATION, "Bearer id-token"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(100));
+    }
+
+    @Test
+    void listsProposalsScopedToTeamId() throws Exception {
+        when(proposalService.listProposals("Bearer id-token", 10L)).thenReturn(List.of(sampleResponse()));
+
+        mockMvc.perform(get("/api/proposals").param("teamId", "10").header(HttpHeaders.AUTHORIZATION, "Bearer id-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(100));
+
+        verify(proposalService).listProposals("Bearer id-token", 10L);
     }
 
     @Test
@@ -98,7 +109,7 @@ class ProposalControllerTest {
 
     @Test
     void publishesProposalAndReturns200() throws Exception {
-        ProposalResponse published = new ProposalResponse(100L, "Title", "Content", 1L, 10L, ProposalStatus.OPEN,
+        ProposalResponse published = new ProposalResponse(100L, "Title", "Content", 1L, 10L, "Team", ProposalStatus.OPEN,
                 List.of("KR"), null, null, null, null, Instant.parse("2026-08-12T00:00:00Z"), Instant.parse("2026-08-12T00:00:00Z"));
         when(proposalService.publishProposal("Bearer id-token", 100L)).thenReturn(published);
 
@@ -120,7 +131,7 @@ class ProposalControllerTest {
     @Test
     void completesProposalAndReturns200() throws Exception {
         ProposalCompleteRequest request = new ProposalCompleteRequest("B안을 채택합니다.");
-        ProposalResponse completed = new ProposalResponse(100L, "Title", "Content", 1L, 10L, ProposalStatus.COMPLETED,
+        ProposalResponse completed = new ProposalResponse(100L, "Title", "Content", 1L, 10L, "Team", ProposalStatus.COMPLETED,
                 List.of("KR"), null, "B안을 채택합니다.", 1L, Instant.parse("2026-08-12T00:00:00Z"),
                 Instant.parse("2026-08-12T00:00:00Z"), Instant.parse("2026-08-12T00:00:00Z"));
         when(proposalService.completeProposal(eq("Bearer id-token"), eq(100L), any(ProposalCompleteRequest.class)))
@@ -173,7 +184,7 @@ class ProposalControllerTest {
     }
 
     private ProposalResponse sampleResponse() {
-        return new ProposalResponse(100L, "Title", "Content", 1L, 10L, ProposalStatus.DRAFT,
+        return new ProposalResponse(100L, "Title", "Content", 1L, 10L, "Team", ProposalStatus.DRAFT,
                 List.of("KR"), null, null, null, null, Instant.parse("2026-08-12T00:00:00Z"), Instant.parse("2026-08-12T00:00:00Z"));
     }
 }
