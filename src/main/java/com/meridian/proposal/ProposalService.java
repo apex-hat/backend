@@ -2,10 +2,13 @@ package com.meridian.proposal;
 
 import com.meridian.ai.CultureAnalysis;
 import com.meridian.ai.CultureAnalysisRepository;
+import com.meridian.ai.ConsensusSummaryRepository;
 import com.meridian.auth.AuthenticationException;
 import com.meridian.auth.FirebaseTokenVerifier;
 import com.meridian.auth.FirebaseUserClaims;
 import com.meridian.common.exception.DomainException;
+import com.meridian.notification.NotificationRepository;
+import com.meridian.opinion.OpinionRepository;
 import com.meridian.team.Team;
 import com.meridian.team.TeamMemberRepository;
 import com.meridian.team.TeamRepository;
@@ -38,6 +41,9 @@ public class ProposalService {
     private final ProposalRepository proposalRepository;
     private final ProposalTargetCultureRepository proposalTargetCultureRepository;
     private final CultureAnalysisRepository cultureAnalysisRepository;
+    private final OpinionRepository opinionRepository;
+    private final ConsensusSummaryRepository consensusSummaryRepository;
+    private final NotificationRepository notificationRepository;
 
     @Transactional
     public ProposalResponse createProposal(String authorizationHeader, ProposalCreateRequest request) {
@@ -105,7 +111,7 @@ public class ProposalService {
 
         assertVisible(proposal, user);
         assertAuthor(proposal, user);
-        assertDraft(proposal, "PROPOSAL_NOT_EDITABLE", "DRAFT 상태의 제안만 수정/삭제할 수 있습니다.");
+        assertActive(proposal);
         assertNoDuplicateCultures(request.targetCultures());
 
         if (!StringUtils.hasText(request.title()) || !StringUtils.hasText(request.content())) {
@@ -132,11 +138,18 @@ public class ProposalService {
 
         assertVisible(proposal, user);
         assertAuthor(proposal, user);
-        assertDraft(proposal, "PROPOSAL_NOT_EDITABLE", "DRAFT 상태의 제안만 수정/삭제할 수 있습니다.");
+        assertActive(proposal);
 
         cultureAnalysisRepository.findByProposal_Id(proposal.getId())
                 .forEach(analysis -> analysis.setProposal(null));
+        notificationRepository.deleteAllByProposal_Id(proposal.getId());
+        consensusSummaryRepository.deleteAllByProposal_Id(proposal.getId());
+        opinionRepository.deleteAllByProposal_Id(proposal.getId());
         proposalTargetCultureRepository.deleteByProposal_Id(proposal.getId());
+        notificationRepository.flush();
+        consensusSummaryRepository.flush();
+        opinionRepository.flush();
+        proposalTargetCultureRepository.flush();
         proposalRepository.delete(proposal);
     }
 
@@ -213,6 +226,13 @@ public class ProposalService {
     private void assertDraft(Proposal proposal, String code, String message) {
         if (proposal.getStatus() != ProposalStatus.DRAFT) {
             throw DomainException.conflict(code, message);
+        }
+    }
+
+    /** 작성 중이거나 의견을 받고 있는 제안은 작성자가 수정/삭제할 수 있다. 합의 확정 이후 기록은 잠근다. */
+    private void assertActive(Proposal proposal) {
+        if (proposal.getStatus() == ProposalStatus.CONSENSUS_READY || proposal.getStatus() == ProposalStatus.COMPLETED) {
+            throw DomainException.conflict("PROPOSAL_NOT_EDITABLE", "합의가 확정된 제안은 수정/삭제할 수 없습니다.");
         }
     }
 
