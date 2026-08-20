@@ -151,7 +151,7 @@ public class ProposalService {
         // DRAFT는 아직 팀원에게 보이지 않으므로(assertVisible), 이미 게시되어 팀원이 볼 수 있는
         // 상태(OPEN/IN_PROGRESS)에서 수정될 때만 알린다.
         if (proposal.getStatus() != ProposalStatus.DRAFT) {
-            notifyTeamOfProposalUpdate(proposal);
+            notifyTeamOfProposalUpdate(proposal, user);
             teamEventPublisher.publish(TeamEventType.PROPOSAL_UPDATED, proposal.getTargetTeam().getId(), proposal.getId());
         }
 
@@ -279,17 +279,22 @@ public class ProposalService {
 
     /**
      * DRAFT 제안은 팀원에게 보이지 않으므로(assertVisible) 게시(OPEN 전환) 시점에만
-     * 작성자를 제외한 팀원 전원에게 알림을 보낸다.
+     * 작성자를 제외한 팀원 전원에게 알림을 보낸다. 게시는 작성자만 할 수 있으므로 행위자=작성자다.
      */
     private void notifyTeamOfNewProposal(Proposal proposal) {
-        notifyTeamMembersExceptAuthor(proposal, NotificationType.PROPOSAL_CREATED, "새 제안이 등록되었습니다",
+        notifyTeamMembersExcept(proposal, proposal.getAuthor(), NotificationType.PROPOSAL_CREATED, "새 제안이 등록되었습니다",
                 proposal.getAuthor().getName() + "님이 \"" + proposal.getTitle() + "\" 제안을 등록했습니다.");
     }
 
-    /** 이미 게시되어 팀원에게 보이는 제안이 수정되었을 때 작성자를 제외한 팀원 전원에게 알림을 보낸다. */
-    private void notifyTeamOfProposalUpdate(Proposal proposal) {
-        notifyTeamMembersExceptAuthor(proposal, NotificationType.PROPOSAL_UPDATED, "제안 내용이 수정되었습니다",
-                proposal.getAuthor().getName() + "님이 \"" + proposal.getTitle() + "\" 제안을 수정했습니다.");
+    /**
+     * 이미 게시되어 팀원에게 보이는 제안이 수정되었을 때 팀원 전원에게 알림을 보낸다.
+     * 수정은 작성자 또는 PM이 할 수 있으므로(assertAuthorOrPm), 항상 작성자가 아니라
+     * 실제 행위자(actor)를 제외해야 한다 — 그렇지 않으면 모더레이션한 PM이 본인 행위에 대한
+     * 알림을 받게 된다. 메시지에도 실제 행위자 이름을 사용한다.
+     */
+    private void notifyTeamOfProposalUpdate(Proposal proposal, User actor) {
+        notifyTeamMembersExcept(proposal, actor, NotificationType.PROPOSAL_UPDATED, "제안 내용이 수정되었습니다",
+                actor.getName() + "님이 \"" + proposal.getTitle() + "\" 제안을 수정했습니다.");
     }
 
     private void notifyProposalModeration(Proposal proposal, NotificationType type, String content) {
@@ -303,10 +308,10 @@ public class ProposalService {
                 .build());
     }
 
-    private void notifyTeamMembersExceptAuthor(Proposal proposal, NotificationType type, String title, String content) {
+    private void notifyTeamMembersExcept(Proposal proposal, User excludedUser, NotificationType type, String title, String content) {
         teamMemberRepository.findAllByTeam_Id(proposal.getTargetTeam().getId()).stream()
                 .map(TeamMember::getUser)
-                .filter(member -> !member.getId().equals(proposal.getAuthor().getId()))
+                .filter(member -> !member.getId().equals(excludedUser.getId()))
                 .forEach(member -> notificationRepository.save(Notification.builder()
                         .user(member)
                         .proposal(proposal)
