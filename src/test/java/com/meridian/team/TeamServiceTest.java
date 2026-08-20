@@ -108,6 +108,35 @@ class TeamServiceTest {
     }
 
     @Test
+    void updatesTeamNameWhenCurrentUserIsPm() {
+        User pm = user(1L, "PM");
+        Team team = team(10L, "Old Name");
+        when(userService.getCurrentUserEntity(AUTHORIZATION)).thenReturn(pm);
+        when(teamRepository.findById(10L)).thenReturn(Optional.of(team));
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(true);
+
+        TeamResponse response = teamService.updateTeam(AUTHORIZATION, 10L, new TeamUpdateRequest(" New Name "));
+
+        assertThat(response.name()).isEqualTo("New Name");
+        assertThat(team.getName()).isEqualTo("New Name");
+    }
+
+    @Test
+    void rejectsTeamUpdateWhenCurrentUserIsNotPmWith403() {
+        User currentUser = user(1L, "Current");
+        Team team = team(10L, "Old Name");
+        when(userService.getCurrentUserEntity(AUTHORIZATION)).thenReturn(currentUser);
+        when(teamRepository.findById(10L)).thenReturn(Optional.of(team));
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(false);
+
+        assertThatThrownBy(() -> teamService.updateTeam(AUTHORIZATION, 10L, new TeamUpdateRequest("New Name")))
+                .isInstanceOfSatisfying(DomainException.class, ex -> {
+                    assertThat(ex.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(ex.getCode()).isEqualTo("TEAM_PM_REQUIRED");
+                });
+    }
+
+    @Test
     void addsMemberWhenCurrentUserIsPm() {
         User pm = user(1L, "PM");
         User target = user(2L, "Member");
