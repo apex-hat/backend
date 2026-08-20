@@ -38,11 +38,20 @@ public class UserController {
     }
 
     /** 팀원 초대 UI에서 이메일로 상대를 찾아 userId를 얻기 위한 검색. 정확히 일치하는 이메일만 조회한다. */
-    @GetMapping("/search")
-    public ResponseEntity<UserSummaryResponse> search(
+    @GetMapping(value = "/search", params = "email")
+    public ResponseEntity<UserSummaryResponse> searchByEmail(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
             @RequestParam String email
     ) {
         return ResponseEntity.ok(userService.searchByEmail(authorizationHeader, email));
+    }
+
+    /** 친구/팀 초대 UI에서 고유 ID(friendCode)로 상대를 찾아 userId를 얻기 위한 검색. */
+    @GetMapping(value = "/search", params = "friendCode")
+    public ResponseEntity<UserSummaryResponse> searchByFriendCode(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @RequestParam String friendCode
+    ) {
+        return ResponseEntity.ok(userService.searchByFriendCode(authorizationHeader, friendCode));
     }
 }

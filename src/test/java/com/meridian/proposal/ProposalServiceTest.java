@@ -265,8 +265,46 @@ class ProposalServiceTest {
 
     @Test
     void rejectsMissingBearerToken() {
-        assertThatThrownBy(() -> proposalService.listProposals(null))
+        assertThatThrownBy(() -> proposalService.listProposals(null, null))
                 .isInstanceOf(AuthenticationException.class);
+    }
+
+    @Test
+    void listProposalsWithoutTeamIdAggregatesAllOfAuthorsTeams() {
+        Proposal proposal = draftProposal();
+        when(teamMemberRepository.findAllByUser_Id(1L)).thenReturn(List.of(
+                TeamMember.builder().id(new TeamMemberId(10L, 1L)).team(team).user(author).role("PM").build()));
+        when(proposalRepository.findVisibleToUser(1L, List.of(10L))).thenReturn(List.of(proposal));
+        when(proposalTargetCultureRepository.findByProposal_Id(100L)).thenReturn(List.of());
+
+        List<ProposalResponse> responses = proposalService.listProposals(AUTH_HEADER, null);
+
+        assertThat(responses).extracting(ProposalResponse::id).containsExactly(100L);
+    }
+
+    @Test
+    void listProposalsWithTeamIdScopesToThatTeamOnly() {
+        Proposal proposal = draftProposal();
+        when(teamMemberRepository.existsByTeam_IdAndUser_Id(10L, 1L)).thenReturn(true);
+        when(proposalRepository.findVisibleToUserInTeam(1L, 10L)).thenReturn(List.of(proposal));
+        when(proposalTargetCultureRepository.findByProposal_Id(100L)).thenReturn(List.of());
+
+        List<ProposalResponse> responses = proposalService.listProposals(AUTH_HEADER, 10L);
+
+        assertThat(responses).extracting(ProposalResponse::id).containsExactly(100L);
+        // 다른 팀(예: 20L)에서 내가 쓴 제안이 새지 않도록, teamId가 지정되면 findVisibleToUser(전체 보기용)가 아니라
+        // findVisibleToUserInTeam만 호출돼야 한다.
+        verify(proposalRepository, never()).findVisibleToUser(any(), any());
+    }
+
+    @Test
+    void listProposalsWithTeamIdRejectsNonMember() {
+        when(teamMemberRepository.existsByTeam_IdAndUser_Id(10L, 1L)).thenReturn(false);
+
+        assertThatThrownBy(() -> proposalService.listProposals(AUTH_HEADER, 10L))
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("TEAM_ACCESS_DENIED");
     }
 
     @Test

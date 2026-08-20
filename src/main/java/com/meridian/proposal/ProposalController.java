@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -38,9 +39,10 @@ public class ProposalController {
 
     @GetMapping
     public ResponseEntity<List<ProposalResponse>> listProposals(
-            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader,
+            @RequestParam(required = false) Long teamId
     ) {
-        return ResponseEntity.ok(proposalService.listProposals(authorizationHeader));
+        return ResponseEntity.ok(proposalService.listProposals(authorizationHeader, teamId));
     }
 
     @GetMapping("/{proposalId}")

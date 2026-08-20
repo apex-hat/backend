@@ -21,3 +21,7 @@ firebase:
 openai:
   api-key: ${OPENAI_API_KEY:}
   model: ${OPENAI_MODEL:}
+
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
