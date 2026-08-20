@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: meridian
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/meridian}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+server:
+  port: 8080
+
+firebase:
+  project-id: ${FIREBASE_PROJECT_ID:}
+  client-email: ${FIREBASE_CLIENT_EMAIL:}
+  private-key: ${FIREBASE_PRIVATE_KEY:}
+
+openai:
+  api-key: ${OPENAI_API_KEY:}
+  model: ${OPENAI_MODEL:}
+
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}

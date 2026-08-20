@@ -28,7 +28,9 @@ Meridian은 글로벌 팀의 협업 과정에서 발생하는 **문화적 표현
    ↓
 AI 문화 맥락 분석
    ↓
-제안 등록
+제안 등록 (DRAFT)
+   ↓
+제안 게시 (OPEN)
    ↓
 팀원 의견 작성
    ↓
@@ -52,7 +54,7 @@ AI 합의 요약
 | Firebase Functions      | REST API 진입점 / API Gateway |
 | Firebase Authentication | 사용자 인증                     |
 | PostgreSQL              | 주요 서비스 데이터 저장              |
-| AI API                  | 문화 맥락 / 의도 / 합의 분석         |
+| AI API                  | 문화 맥락 / 의도 / 합의 분석 (OpenAI) |
 
 ## Frontend
 
@@ -72,40 +74,38 @@ AI 합의 요약
 Meridian은 **기존 REST API 구조를 유지하면서 Firebase를 인증 및 API 진입점으로 활용**합니다.
 
 ```text
-                    ┌─────────────────────┐
-                    │      React App       │
-                    │ Vite + TypeScript   │
-                    └──────────┬──────────┘
-                               │
-                               │ REST API
-                               ▼
-                    ┌─────────────────────┐
-                    │   Firebase Auth     │
-                    │   Authentication    │
-                    └──────────┬──────────┘
-                               │
-                         ID Token
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │   Firebase Functions│
-                    │    REST API Entry   │
-                    └──────────┬──────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │     Spring Boot     │
-                    │ Business Logic / API│
-                    └───────┬───────┬─────┘
-                            │       │
-                   ┌────────┘       └─────────┐
-                   ▼                          ▼
-          ┌─────────────────┐        ┌─────────────────┐
-          │   PostgreSQL    │        │     AI API      │
-          │   Application   │        │ Context / Intent│
-          │      Data       │        │   / Consensus  │
-          └─────────────────┘        └─────────────────┘
+     ┌─────────────────────┐   로그인 (SDK)   ┌─────────────────────┐
+     │   Firebase Auth      │◄───────────────►│      React App       │
+     │   (ID Token 발급)     │   ID Token 수신   │  Vite + TypeScript   │
+     └─────────────────────┘                  └──────────┬──────────┘
+                                                          │
+                                              REST API + Authorization:
+                                              Bearer <Firebase ID Token>
+                                                          │
+                                                          ▼
+                                              ┌─────────────────────┐
+                                              │   Firebase Functions│
+                                              │    REST API Entry   │
+                                              └──────────┬──────────┘
+                                                          │
+                                                          ▼
+                                              ┌─────────────────────┐
+                                              │     Spring Boot     │
+                                              │ Business Logic / API│
+                                              │ (Token 검증 + JIT    │
+                                              │  사용자 프로필 동기화) │
+                                              └───────┬───────┬─────┘
+                                                       │       │
+                                              ┌────────┘       └─────────┐
+                                              ▼                          ▼
+                                     ┌─────────────────┐        ┌─────────────────┐
+                                     │   PostgreSQL    │        │     AI API      │
+                                     │   Application   │        │ Context / Intent│
+                                     │      Data       │        │   / Consensus  │
+                                     └─────────────────┘        └─────────────────┘
 ```
+
+> Firebase Auth는 요청 경로의 중간 서버가 아니라 **클라이언트가 로그인 시점에 ID Token을 발급받는 대상**입니다. 이후의 모든 API 요청은 React App이 Firebase Functions로 직접 보내며, 발급받은 ID Token을 `Authorization` 헤더에 담아 전달합니다.
 
 ### Firebase를 사용하는 이유
 
@@ -185,40 +185,130 @@ API 처리
 
 Backend에서는 인증된 사용자의 Firebase UID를 기준으로 사용자 정보를 식별합니다.
 
+> `users.firebase_uid`는 UNIQUE로 관리하고, `users.id`는 Meridian 내부 PK로 사용합니다.
+
+### JIT(Just-In-Time) 사용자 프로필 동기화
+
+`/api/auth/signup` 호출 여부와 무관하게, 인증이 필요한 모든 API는 Token 검증 이후 다음 순서로 동작합니다.
+
+```text
+Firebase ID Token 검증
+      ↓
+firebase_uid로 users 테이블 조회
+      ↓
+존재하지 않으면 Firebase Token Claim(email, name 등)으로
+users row를 자동 생성
+      ↓
+API 로직 수행
+```
+
+이 동작 덕분에 `/api/auth/signup`을 생략하더라도 인증된 사용자는 항상 Postgres에 대응하는 프로필을 가지며, `/api/users/me`, 팀/제안 관련 API가 정상 동작합니다.
+
 ---
 
 # 6. API Specification
 
 ## 6.1 Auth
 
-| 기능   | Method | Endpoint           | 설명      |
-| ---- | ------ | ------------------ | ------- |
-| 회원가입 | POST   | `/api/auth/signup` | 회원가입    |
-| 로그인  | POST   | `/api/auth/login`  | 사용자 로그인 |
-| 로그아웃 | POST   | `/api/auth/logout` | 로그아웃    |
+Meridian의 실제 인증(계정 생성, 로그인, 세션/토큰 발급)은 **Firebase Authentication**이 담당합니다. 클라이언트는 Firebase SDK로 인증한 뒤 발급된 ID Token을 Backend API에 전달합니다.
 
-> Firebase Authentication을 사용하므로 실제 인증 처리는 Firebase Auth가 담당하고, REST API는 서비스 사용자 정보 및 인증 상태와 연계됩니다.
+아래 `/api/auth/*` endpoint는 Firebase Authentication 자체를 대체하는 인증 API가 아니라, 클라이언트 편의를 위한 **선택적 연계 endpoint**입니다. 사용자 프로필의 최초 생성은 [JIT 사용자 프로필 동기화](#jitjust-in-time-사용자-프로필-동기화)를 통해 항상 보장되므로, MVP에서는 Firebase SDK를 직접 사용하고 이 endpoint를 생략할 수 있습니다.
+
+| 기능 | Method | Endpoint | 설명 |
+| --- | --- | --- | --- |
+| 회원가입 연계 | POST | `/api/auth/signup` | Firebase 사용자 생성 후 Meridian 사용자 프로필 생성/동기화 |
+| 로그인 연계 | POST | `/api/auth/login` | 인증된 Firebase 사용자의 Meridian 사용자 상태 확인 |
+| 로그아웃 연계 | POST | `/api/auth/logout` | 애플리케이션 측 로그아웃 상태 처리. 실제 인증 세션 종료는 Firebase SDK가 담당 |
+
+> Backend API의 인증 여부는 보호 endpoint에서 `Authorization: Bearer <Firebase ID Token>`을 검증하는 방식으로 판단합니다.
 
 ---
 
 ## 6.2 User
 
-| 기능        | Method | Endpoint        | 설명             |
-| --------- | ------ | --------------- | -------------- |
-| 사용자 정보 조회 | GET    | `/api/users/me` | 로그인한 사용자 정보 조회 |
+| 기능        | Method | Endpoint            | 설명                                   |
+| --------- | ------ | ------------------- | ------------------------------------ |
+| 사용자 정보 조회 | GET    | `/api/users/me`     | 로그인한 사용자 정보 조회                        |
+| 사용자 정보 수정 | PATCH  | `/api/users/me`     | 로그인한 사용자 정보 부분 수정                      |
+| 사용자 이메일 검색 | GET    | `/api/users/search` | 이메일로 사용자 검색(팀원 초대 시 userId 확인용)        |
 
 ```http
 GET /api/users/me
 Authorization: Bearer <Firebase ID Token>
 ```
 
+### 사용자 정보 수정
+
+```http
+PATCH /api/users/me
+Authorization: Bearer <Firebase ID Token>
+```
+
+JIT 사용자 프로필 동기화는 Firebase ID Token의 claim(email, name 등)만 반영하므로, `country`/`timeZone`/`location`/`cultureTag`는 로그인만으로는 채워지지 않는 경우가 많다(클라이언트 SDK로는 custom claim을 직접 설정할 수 없음). 이 endpoint로 로그인 이후 프로필 정보를 채우거나 수정할 수 있다.
+
+전달된 필드만 반영하는 부분 수정이며, 값을 생략하거나 빈 문자열로 보내면 기존 값을 유지한다(명시적으로 지우는 기능은 없음).
+
+요청 예시:
+
+```json
+{
+  "name": "이민아",
+  "country": "KR",
+  "timeZone": "Asia/Seoul",
+  "location": "Seoul",
+  "cultureTag": "high-context"
+}
+```
+
+### 사용자 검색 (이메일 / 고유 ID)
+
+```http
+GET /api/users/search?email={email}
+GET /api/users/search?friendCode={friendCode}
+Authorization: Bearer <Firebase ID Token>
+```
+
+`email`과 `friendCode` 중 정확히 하나만 쿼리 파라미터로 전달한다(둘 다 같은 endpoint를 쓰지만, 쿼리 파라미터 이름에 따라 이메일 검색 또는 고유 ID 검색으로 분기된다). 일치하는 사용자를 찾아 `id`/`name`/`email`만 반환한다(`firebaseUid` 등 민감 정보는 제외). 인증된 사용자만 검색할 수 있으며, 일치하는 사용자가 없으면 `404 USER_NOT_FOUND`를 반환한다.
+
+`friendCode` 검색은 팀 초대(아래 [Team Invite API](#team-invite-api))에서 상대를 찾을 때 쓰인다. `#` 접두사가 있어도 없어도 되고, 대소문자를 구분하지 않는다.
+
+예상 응답:
+
+```json
+{
+  "id": 12,
+  "name": "이민아",
+  "email": "teammate@example.com"
+}
+```
+
 ---
 
 ## 6.3 Team
 
-| 기능      | Method | Endpoint     | 설명              |
-| ------- | ------ | ------------ | --------------- |
-| 팀 목록 조회 | GET    | `/api/teams` | 사용자가 속한 팀 목록 조회 |
+| 기능       | Method | Endpoint                              | 설명                                             |
+| -------- | ------ | -------------------------------------- | ------------------------------------------------ |
+| 팀 생성     | POST   | `/api/teams`                           | 새 팀 생성. 생성 요청자는 자동으로 `role=PM`으로 팀에 추가됨 |
+| 팀 목록 조회  | GET    | `/api/teams`                           | 사용자가 속한 팀 목록 조회                          |
+| 팀 상세 조회  | GET    | `/api/teams/{teamId}`                  | 팀 정보 조회                                     |
+| 팀 정보 수정  | PATCH  | `/api/teams/{teamId}`                  | 팀명 등 부분 수정 (`name`)                         |
+| 팀원 목록 조회 | GET    | `/api/teams/{teamId}/members`          | 팀에 속한 팀원 목록 조회                          |
+| 팀원 추가    | POST   | `/api/teams/{teamId}/members`          | 팀에 사용자 추가 (`userId`, `role`)                |
+| 팀원 제거    | DELETE | `/api/teams/{teamId}/members/{userId}` | 팀에서 사용자 제거                                |
+| 팀 삭제     | DELETE | `/api/teams/{teamId}`                  | 팀과 팀에 속한 제안/의견/문화분석/합의요약/알림/초대/팀 메시지/활동 로그를 모두 영구 삭제 |
+| PM 양도     | POST   | `/api/teams/{teamId}/pm-transfer`      | 호출자(PM)가 다른 팀원에게 `role=PM`을 넘기고 본인은 `role=MEMBER`로 전환 (`newPmUserId`) |
+| 팀 나가기    | DELETE | `/api/teams/{teamId}/leave`            | 호출자가 팀에서 탈퇴                              |
+
+> 팀원 추가/제거, 팀 정보 수정, 팀 삭제, PM 양도는 해당 팀의 `role=PM`인 사용자만 수행할 수 있습니다.
+
+> `POST /api/teams/{teamId}/members`는 상대의 동의 없이 즉시 팀원으로 추가한다. 상대의 동의(수락/거절)를 거쳐야 하는 초대 흐름은 아래 [Team Invite API](#team-invite-api)를 사용한다 — 새 팀원을 들일 때는 이쪽을 권장한다.
+
+### 팀 나가기 / PM 양도 규칙
+
+- 팀에는 항상 `role=PM`이 최소 1명 있어야 합니다. 본인이 그 팀의 유일한 PM이면 [PM 양도](#63-team)를 먼저 호출해 다른 팀원에게 PM을 넘긴 뒤에만 [팀 나가기](#63-team)를 호출할 수 있습니다(그렇지 않으면 `409 TEAM_PM_MUST_TRANSFER_FIRST`).
+- 다른 PM이 이미 있는 팀이라면(PM이 2명 이상) 위 제약 없이 바로 나갈 수 있습니다.
+- 팀원이 자기 자신뿐이라 양도할 대상이 없는 경우, 나가는 대신 팀 삭제를 사용해야 합니다.
+- `POST /api/teams/{teamId}/pm-transfer`에서 이미 PM인 자신을 대상으로 지정하면 `400 TEAM_PM_TRANSFER_TO_SELF`를 반환합니다.
 
 ---
 
@@ -234,6 +324,12 @@ POST /api/proposals
 
 새로운 협업 제안을 등록합니다.
 
+- `teamId`는 사용자가 소속된 팀이어야 합니다.
+- `targetCultures`는 팀의 국가 목록과 동일한 개념이 아니라 AI 문화 맥락 분석의 대상 문화권을 의미합니다. 작성자가 자유롭게 선택하며 팀원의 실제 `country`와 일치할 필요는 없습니다(예: 팀에 없는 이해관계자의 문화권을 참고용으로 추가 가능). Backend는 팀원 국가와의 일치 여부를 검증하지 않습니다.
+- `deadline`은 선택값이며, 지정된 경우 마감 이후 AI 합의 요약을 실행할 수 있습니다.
+- `cultureAnalysisIds`는 선택값이며, 등록 전 `proposalId` 없이 수행한 [문화 맥락 분석](#91-문화-맥락-분석) 결과 ID를 전달하면 해당 분석 이력의 `proposal_id`가 생성된 제안으로 채워집니다.
+- 생성된 제안은 항상 `DRAFT` 상태로 시작하며, 팀원에게 공개되지 않고 작성자만 조회/수정할 수 있습니다. 팀원에게 공개하려면 [제안 게시](#제안-게시) API를 호출해야 합니다.
+
 ### 주요 데이터
 
 ```json
@@ -246,6 +342,7 @@ POST /api/proposals
     "US",
     "IN"
   ],
+  "cultureAnalysisIds": ["analysis-001"],
   "deadline": "2026-08-13T18:00:00Z"
 }
 ```
@@ -256,9 +353,10 @@ POST /api/proposals
 
 ```http
 GET /api/proposals
+GET /api/proposals?teamId={teamId}
 ```
 
-사용자가 접근 가능한 제안 목록을 조회합니다.
+사용자가 접근 가능한 제안 목록을 조회합니다. `teamId`는 선택 쿼리 파라미터이며, 지정하면 해당 팀의 제안으로 결과를 필터링합니다.
 
 ---
 
@@ -278,7 +376,11 @@ GET /api/proposals/{proposalId}
 PUT /api/proposals/{proposalId}
 ```
 
-제안 정보를 수정합니다.
+제안 정보를 수정합니다. `DRAFT`/`OPEN`/`IN_PROGRESS` 상태의 제안만 수정할 수 있습니다 — 대상 팀원 전원이 응답해 `CONSENSUS_READY`(분석 가능) 이상으로 넘어간 뒤에는 의견이 이미 특정 내용을 근거로 제출된 상태이므로 더 이상 수정할 수 없습니다.
+
+> **PM 모더레이션**: 작성자 본인 외에, 해당 제안의 대상 팀 `role=PM`인 사용자도 수정할 수 있습니다(팀 진행 관리 목적). PM이 다른 사람의 제안을 수정하면 작성자에게 `PROPOSAL_UPDATED_BY_PM` 알림이 별도로 발송되고, 팀의 [활동 로그](#activity-log-api)에 `PROPOSAL_UPDATED_BY_PM` 기록이 남습니다.
+
+> `DRAFT`가 아닌 상태(이미 게시되어 팀원에게 보이는 상태)에서 수정되면, 실제 수정을 수행한 사용자(작성자 또는 모더레이션한 PM)를 제외한 대상 팀 전체 팀원에게 `PROPOSAL_UPDATED` 알림이 발송됩니다(§11).
 
 ---
 
@@ -288,7 +390,44 @@ PUT /api/proposals/{proposalId}
 DELETE /api/proposals/{proposalId}
 ```
 
-제안을 삭제합니다.
+제안을 삭제합니다. `DRAFT`/`OPEN`/`IN_PROGRESS` 상태의 제안만 삭제할 수 있습니다 — [제안 수정](#제안-수정)과 동일하게, 대상 팀원 전원이 응답해 `CONSENSUS_READY`(분석 가능) 이상으로 넘어간 뒤에는 삭제할 수 없습니다.
+
+> **PM 모더레이션**: [제안 수정](#제안-수정)과 동일하게, 작성자 본인 외에 대상 팀의 `role=PM`인 사용자도 삭제할 수 있습니다. PM이 다른 사람의 제안을 삭제하면 작성자에게 `PROPOSAL_DELETED_BY_PM` 알림이 발송되고, 팀의 [활동 로그](#activity-log-api)에 기록이 남습니다(삭제된 제안이므로 이 알림은 특정 `proposalId`를 참조하지 않습니다).
+
+> `DRAFT`가 아닌 상태(이미 게시되어 팀원에게 보이는 상태)에서 삭제되면, 접속 중인 팀원에게 `PROPOSAL_DELETED` WebSocket 이벤트가 브로드캐스트됩니다(§11).
+
+---
+
+## 제안 게시
+
+```http
+POST /api/proposals/{proposalId}/publish
+```
+
+제안을 팀원에게 공개하고 의견 수집을 시작합니다. `DRAFT` 상태의 제안만 게시할 수 있으며, 게시 후 상태는 `OPEN`으로 변경됩니다.
+
+> 이후 팀원이 첫 의견을 등록하면 상태는 시스템에 의해 자동으로 `IN_PROGRESS`로 전환됩니다. 별도의 API 호출은 필요하지 않습니다.
+
+> 게시 시점에 작성자를 제외한 대상 팀 전체 팀원에게 `PROPOSAL_CREATED` 알림이 발송됩니다(`GET /api/notifications`로 조회). `DRAFT` 상태에서는 팀원에게 제안 자체가 보이지 않으므로(§7) 생성 시점이 아니라 게시 시점에 발송합니다.
+
+---
+
+## 제안 완료 처리
+
+```http
+POST /api/proposals/{proposalId}/complete
+```
+
+AI 합의 요약을 참고하여 최종 의사결정을 확정하고 제안을 종료합니다. `CONSENSUS_COMPLETED` 상태의 제안만 완료 처리할 수 있으며, 처리 후 상태는 `COMPLETED`로 변경됩니다.
+
+### 주요 데이터
+
+```json
+{
+  "decision": "B안을 채택하되, 모바일 UI는 추가 논의 후 반영",
+  "decidedBy": "user-001"
+}
+```
 
 ---
 
@@ -320,6 +459,8 @@ PUT /api/opinions/{opinionId}
 DELETE /api/opinions/{opinionId}
 ```
 
+> **PM 모더레이션**: 의견 수정/삭제는 본인 의견이 아니어도, 해당 제안의 대상 팀 `role=PM`인 사용자면 수행할 수 있습니다(팀 진행 관리 목적). PM이 다른 사람의 의견을 수정/삭제하면 원 작성자에게 각각 `OPINION_UPDATED_BY_PM`/`OPINION_DELETED_BY_PM` 알림이 발송되고, 팀의 [활동 로그](#activity-log-api)에 기록이 남습니다.
+
 ### 의견 유형
 
 ```text
@@ -332,7 +473,7 @@ CONDITIONAL_AGREE
 
 ```json
 {
-  "type": "CONDITIONAL_AGREE",
+  "stance": "CONDITIONAL_AGREE",
   "content": "B안에 동의하지만 모바일 화면에서는 추가적인 수정이 필요합니다."
 }
 ```
@@ -352,6 +493,10 @@ POST /api/ai/context-analysis
 ```
 
 제안 내용을 대상 문화권의 관점에서 분석합니다.
+
+> 이 분석은 **제안 최종 등록 전에 수행할 수 있으므로 `proposalId` 없이도 호출 가능**합니다. 제안 등록이 완료되면 해당 분석 이력을 `proposalId`와 연결할 수 있습니다.
+
+> `interpretation`/`suggestion`은 이 API를 호출한 사용자의 `country`에 대응하는 언어로 생성됩니다(매핑은 [9.2](#92-ai-합의-요약)의 합의 요약과 동일). `flaggedPhrases`는 원문에서 그대로 하이라이트할 수 있도록 번역하지 않고 원문 그대로 반환합니다.
 
 ### 분석 결과
 
@@ -389,6 +534,18 @@ POST /api/ai/consensus-summary
 ```
 
 제안 내용과 팀원들의 의견을 분석하여 합의 상태와 핵심 쟁점을 제공합니다.
+
+"대상 팀원"은 제안의 `targetTeamId`에 소속된 전체 팀원을 의미합니다.
+
+실행 조건은 다음과 같습니다.
+- 모든 대상 팀원의 의견이 제출되었거나
+- 설정된 `deadline`이 경과한 경우
+
+응답 인원이 부족하여 요약을 실행할 수 없는 경우에는 도메인 오류로 응답합니다.
+
+> 이 조건은 별도의 배치/스케줄러 없이 **API 호출 시점에 검사**합니다. 실행에 성공하면 합의 요약을 생성한 뒤 Proposal 상태를 `CONSENSUS_COMPLETED`(분석 완료)로 갱신합니다(`COMPLETED`로 이미 넘어갔다면 유지). 대상 팀원 전원 응답이라는 조건 자체는 이 API 호출 이전, 마지막 팀원이 의견을 등록하는 시점에 `CONSENSUS_READY`(분석 가능)로 이미 반영되어 있습니다(§14). 이미 `CONSENSUS_COMPLETED` 이상인 제안에 다시 호출하면 새로운 합의 요약 이력을 추가로 생성합니다(최신 이력이 현재 합의 요약으로 사용됨).
+
+> 요약 텍스트(`summary`/`keyIssues`/`culturalAnalysis`/`hiddenOpposition`/`recommendedActions`)는 이 API를 호출한 사용자의 `country`에 대응하는 언어로 생성됩니다(`consensusStatus` 값 자체는 항상 영어 enum). 매핑은 프론트 `ProfilePage.tsx`의 `COUNTRY_LANGUAGE`와 동일하며, `country`가 없거나 매핑에 없는 국가면 영어로 생성됩니다.
 
 ### 분석 결과
 
@@ -451,10 +608,10 @@ AI 결과는 의사결정을 대신하는 것이 아니라 **의견 해석을 �
 ## 시간대 조회
 
 ```http
-GET /api/dashboard/timezones
+GET /api/dashboard/timezones?teamId={teamId}
 ```
 
-팀원의 글로벌 시간대 정보를 조회합니다.
+`teamId`에 속한 팀원의 글로벌 시간대 정보를 조회합니다. `teamId`는 필수 쿼리 파라미터이며, 요청 사용자가 해당 팀에 속하지 않은 경우 `403`을 반환합니다.
 
 ### 제공 정보
 
@@ -493,10 +650,10 @@ GET /api/dashboard/timezones
 ## 응답 현황 조회
 
 ```http
-GET /api/dashboard/status
+GET /api/dashboard/status?proposalId={proposalId}
 ```
 
-제안별 팀원 응답 현황을 조회합니다.
+`proposalId`에 해당하는 제안의 팀원 응답 현황을 조회합니다. `proposalId`는 필수 쿼리 파라미터입니다.
 
 예:
 
@@ -534,12 +691,234 @@ PATCH /api/notifications/{notificationId}
 
 ```text
 PROPOSAL_CREATED
-OPINION_REQUESTED
+PROPOSAL_UPDATED
+OPINION_REQUESTED             (미구현: 아직 발송 트리거 없음)
 DEADLINE_APPROACHING
-CONSENSUS_SUMMARY_COMPLETED
+CONSENSUS_SUMMARY_COMPLETED   (미구현: 아직 발송 트리거 없음)
+FRIEND_REQUEST
+TEAM_INVITE
+OPINION_UPDATED_BY_PM
+OPINION_DELETED_BY_PM
+PROPOSAL_UPDATED_BY_PM
+PROPOSAL_DELETED_BY_PM
 ```
 
-동일 이벤트에 대한 중복 알림은 방지합니다.
+> `notifications.type`도 위 값을 그대로 사용합니다. `OPINION_REQUESTED`/`CONSENSUS_SUMMARY_COMPLETED`는 데이터 모델(enum)에는 정의되어 있지만, 이를 실제로 생성·발송하는 서비스 로직은 아직 구현되지 않았습니다(향후 구현 예정). 나머지 타입은 모두 실제로 발송됩니다.
+>
+> `PROPOSAL_CREATED`/`PROPOSAL_UPDATED`는 각각 [제안 게시](#제안-게시)·[제안 수정](#제안-수정)이 팀원에게 이미 공개된(=`DRAFT`가 아닌) 제안에 적용될 때, 실제로 그 동작을 수행한 사용자(작성자 또는 [모더레이션한 PM](#제안-수정))를 제외한 대상 팀 전체 팀원에게 발송됩니다.
+>
+> `OPINION_UPDATED_BY_PM`/`OPINION_DELETED_BY_PM`/`PROPOSAL_UPDATED_BY_PM`/`PROPOSAL_DELETED_BY_PM`은 PM이 본인이 작성하지 않은 의견/제안을 모더레이션 목적으로 수정·삭제했을 때, 원 작성자에게만 발송됩니다(§7 [제안 수정](#제안-수정)/[제안 삭제](#제안-삭제), §8 Opinion API 참고). 같은 행위는 팀의 [활동 로그](#activity-log-api)에도 함께 기록됩니다.
+>
+> `DEADLINE_APPROACHING`은 별도 스케줄러(15분 주기)가 마감이 24시간 이내로 임박했지만 아직 의견 수집 중(`OPEN`/`IN_PROGRESS`)인 제안을 찾아, 아직 의견을 남기지 않은 대상 팀원에게 발송합니다. 같은 제안에 대해 한 번만 발송되도록 `proposals.deadline_reminder_sent` 플래그로 재발송을 막습니다(§13).
+
+동일 이벤트에 대한 중복 알림은 방지하도록 설계되어 있습니다. `PROPOSAL_CREATED`, `OPINION_REQUESTED`, `CONSENSUS_SUMMARY_COMPLETED`처럼 사용자-제안 조합당 한 번만 발생해야 하는 이벤트는 알림 생성 전 `(user_id, proposal_id, type)` 조합으로 기존 알림 존재 여부를 확인해 중복 생성을 막습니다. `DEADLINE_APPROACHING`은 반복 발생이 정상인 이벤트이므로 이 조합 기준 대신, 위에서 설명한 제안 단위 `deadline_reminder_sent` 플래그로 재발송 여부를 판단합니다. (`OPINION_REQUESTED`/`CONSENSUS_SUMMARY_COMPLETED`는 발송 로직 자체가 아직 없어 이 중복 방지 규칙도 해당 로직 구현 시 함께 적용됩니다.)
+
+`FRIEND_REQUEST`는 아래 Friend API에서 친구 요청이 생성될 때, `TEAM_INVITE`는 [Team Invite API](#team-invite-api)에서 팀 초대가 생성되거나 다시 보내질 때 수신자에게 발송됩니다.
+
+## 실시간 이벤트 (WebSocket)
+
+```text
+ws(s)://<host>/ws/team-events?token={Firebase ID Token}&teamId={teamId}
+```
+
+같은 팀의 다른 팀원이 제안/의견을 생성·수정·삭제할 때, 대시보드를 열어 둔 다른 팀원에게 새로고침 없이 즉시 알리기 위한 채널입니다. 브라우저 `WebSocket` API는 커스텀 헤더를 보낼 수 없어 `Authorization` 헤더 대신 쿼리 파라미터 `token`으로 Firebase ID Token을 전달합니다. 연결 시점에 토큰을 검증하고 `teamId`에 실제로 소속된 팀원인지 확인하며, 아니면 연결을 거부합니다(`401`/`403`/`400`에 대응하는 handshake 실패).
+
+연결에 성공하면 아래 payload가 JSON 텍스트 메시지로 전송됩니다. 클라이언트는 `type`/`proposalId`로 부분 갱신을 시도하기보다, 수신 즉시 목록(제안/의견/알림)을 다시 조회(refetch)하는 용도로 사용하는 것을 권장합니다.
+
+```json
+{
+  "type": "PROPOSAL_CREATED",
+  "teamId": 10,
+  "proposalId": 100
+}
+```
+
+`type`은 아래 값을 사용하며, 각각 REST API 성공 시점에 발송됩니다.
+
+```text
+PROPOSAL_CREATED   — POST /api/proposals/{proposalId}/publish 성공 시
+PROPOSAL_UPDATED   — PUT /api/proposals/{proposalId} 성공 시 (DRAFT가 아닐 때만)
+PROPOSAL_DELETED   — DELETE /api/proposals/{proposalId} 성공 시 (DRAFT가 아니었을 때만)
+OPINION_CREATED    — POST /api/opinions 성공 시
+OPINION_UPDATED    — PUT /api/opinions/{opinionId} 성공 시
+OPINION_DELETED    — DELETE /api/opinions/{opinionId} 성공 시
+MESSAGE_CREATED    — POST /api/teams/{teamId}/messages 성공 시 (아래 Team Message API)
+```
+
+> `DRAFT` 상태의 제안은 애초에 작성자 외에는 보이지 않으므로(§7), 그 상태에서의 생성/수정/삭제는 브로드캐스트하지 않습니다.
+>
+> 이벤트는 서버 인스턴스 메모리에 연결된 세션에만 전달되는 단일 인스턴스 브로드캐스트입니다(별도의 메시지 브로커 없음). 연결이 끊기면 클라이언트는 재연결을 시도해야 합니다.
+
+---
+
+## Friend API
+
+사용자마다 고유 코드(`friendCode`, 예: `MER-7F3K`)를 가지며, `GET /api/users/me` 응답의 `friendCode` 필드로 확인할 수 있습니다. 이 코드로 서로를 찾아 친구 요청을 보내고 수락하는 API입니다.
+
+| 기능        | Method | Endpoint                          | 설명                                  |
+| --------- | ------ | ---------------------------------- | ------------------------------------ |
+| 친구 요청 보내기 | POST   | `/api/friends/requests`            | 상대의 `friendCode`로 친구 요청 전송 |
+| 받은 요청 목록  | GET    | `/api/friends/requests`            | 나에게 온 PENDING 상태 요청 목록      |
+| 요청 수락/거절  | PATCH  | `/api/friends/requests/{requestId}` | `accept: true/false`로 응답        |
+| 친구 목록 조회  | GET    | `/api/friends`                     | 수락된(ACCEPTED) 친구 목록          |
+
+```http
+POST /api/friends/requests
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "friendCode": "MER-7F3K"
+}
+```
+
+자기 자신에게 보내면 `400 SELF_FRIEND_REQUEST`, 존재하지 않는 코드면 `404 USER_NOT_FOUND`, 이미 친구이거나 요청이 진행 중이면 `409 FRIEND_REQUEST_EXISTS`를 반환합니다. 요청이 성공하면 상대방에게 `FRIEND_REQUEST` 타입 알림이 생성됩니다.
+
+```http
+PATCH /api/friends/requests/{requestId}
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "accept": true
+}
+```
+
+수신자 본인만 응답할 수 있으며(`403 FRIEND_REQUEST_ACCESS_DENIED`), 이미 처리된 요청에 다시 응답하면 `409 FRIEND_REQUEST_ALREADY_RESOLVED`를 반환합니다.
+
+---
+
+## Message API
+
+친구 사이에만 주고받을 수 있는 1:1 메시지입니다. 별도의 대화방(Conversation) 개념 없이, 두 사용자의 `userId` 쌍으로 대화가 정해집니다.
+
+| 기능      | Method | Endpoint                     | 설명                          |
+| ------- | ------ | ------------------------------ | --------------------------- |
+| 메시지 전송  | POST   | `/api/messages`                 | `receiverId`, `content`로 전송 |
+| 대화 조회   | GET    | `/api/messages/{friendUserId}`  | 특정 친구와의 전체 대화 내역 조회         |
+
+```http
+POST /api/messages
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "receiverId": 12,
+  "content": "안녕하세요!"
+}
+```
+
+친구 사이가 아니면 `403 NOT_FRIENDS`를 반환합니다. 대화 조회 시 내가 받은 메시지 중 안 읽은 것은 자동으로 읽음 처리됩니다. 실시간 갱신은 별도 구독 없이 클라이언트가 짧은 주기로 다시 조회하는 방식(polling)을 전제로 합니다.
+
+---
+
+## Team Message API
+
+팀에 소속된 팀원끼리 주고받는 그룹 채팅입니다. 1:1 [Message API](#message-api)와 달리 친구 관계가 아니어도 같은 팀 소속이면 대화할 수 있으며, 별도의 대화방 개념 없이 `teamId` 하나로 대화가 정해집니다.
+
+| 기능      | Method | Endpoint                        | 설명                          |
+| ------- | ------ | --------------------------------- | --------------------------- |
+| 메시지 전송  | POST   | `/api/teams/{teamId}/messages`    | `content`로 팀 전체에 메시지 전송     |
+| 대화 조회   | GET    | `/api/teams/{teamId}/messages`    | 해당 팀의 전체 대화 내역 조회           |
+
+```http
+POST /api/teams/{teamId}/messages
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "content": "안녕하세요!"
+}
+```
+
+요청 사용자가 해당 팀 소속이 아니면 `403`을 반환합니다. 메시지 전송에 성공하면 같은 팀의 다른 팀원에게 WebSocket으로 `MESSAGE_CREATED` 이벤트가 브로드캐스트됩니다(§11). 읽음 처리 개념은 없으며, 실시간 갱신은 WebSocket 수신 시 클라이언트가 대화 목록을 다시 조회(refetch)하는 방식을 전제로 합니다.
+
+---
+
+## Team Invite API
+
+팀 PM이 사용자의 고유 ID(`friendCode`)로 팀 초대를 보내고, 상대가 수락해야 실제로 팀원이 되는 흐름입니다. `POST /api/teams/{teamId}/members`(즉시 추가)와 달리, 수락 전까지는 `team_members`에 아무 영향도 주지 않습니다.
+
+| 기능        | Method | Endpoint                                    | 설명                              |
+| --------- | ------ | --------------------------------------------- | -------------------------------- |
+| 초대 보내기    | POST   | `/api/teams/{teamId}/invites`                 | `friendCode`로 초대 전송(PM만)     |
+| 보낸 초대 현황  | GET    | `/api/teams/{teamId}/invites`                 | 이 팀에서 보낸 초대 전체(대기/수락/거절) 조회(PM만) |
+| 초대 취소     | DELETE | `/api/teams/{teamId}/invites/{inviteId}`      | 아직 응답하지 않은(PENDING) 초대 취소(PM만) |
+| 초대 다시 보내기 | POST   | `/api/teams/{teamId}/invites/{inviteId}/resend` | PENDING 초대에 알림을 한 번 더 발송(PM만, 초대 자체는 유지) |
+| 받은 초대 목록  | GET    | `/api/team-invites`                           | 나에게 온 PENDING 상태 초대 목록    |
+| 초대 수락/거절  | PATCH  | `/api/team-invites/{inviteId}`                | `accept: true/false`로 응답     |
+
+```http
+POST /api/teams/{teamId}/invites
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "friendCode": "MER-7F3K"
+}
+```
+
+PM이 아니면 `403 TEAM_PM_REQUIRED`, 존재하지 않는 코드면 `404 USER_NOT_FOUND`, 이미 팀원이면 `409 TEAM_MEMBER_ALREADY_EXISTS`, 이미 초대가 진행 중이면 `409 TEAM_INVITE_EXISTS`를 반환합니다. 요청이 성공하면 초대받은 사용자에게 `TEAM_INVITE` 타입 알림이 생성됩니다.
+
+```http
+PATCH /api/team-invites/{inviteId}
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "accept": true
+}
+```
+
+초대받은 본인만 응답할 수 있으며(`403 TEAM_INVITE_ACCESS_DENIED`), 이미 처리된 초대에 다시 응답하면 `409 TEAM_INVITE_ALREADY_RESOLVED`를 반환합니다. 수락(`accept: true`) 시 그 순간 실제 `team_members` row가 생성됩니다.
+
+초대 취소/다시 보내기는 PENDING 상태의 초대에만 가능하며, 이미 수락/거절된 초대이거나 다른 팀의 초대 ID면 `409 TEAM_INVITE_ALREADY_RESOLVED` 또는 `404 TEAM_INVITE_NOT_FOUND`를 반환합니다. 다시 보내기는 초대 상태를 바꾸지 않고 `TEAM_INVITE` 알림만 한 번 더 생성합니다(리마인더 목적).
+
+---
+
+## Activity Log API
+
+팀원 누구나 볼 수 있는, 팀 내 모더레이션(관리) 행위에 대한 감사 기록입니다. 팀원 제거, PM 양도, PM의 의견/제안 모더레이션(수정·삭제) 등 다른 팀원에게 영향을 주는 행위가 발생할 때마다 자동으로 기록됩니다.
+
+| 기능      | Method | Endpoint                          | 설명                     |
+| ------- | ------ | ------------------------------------ | ------------------------ |
+| 활동 로그 조회 | GET    | `/api/teams/{teamId}/activity-log`   | 팀의 활동 로그를 최신순으로 조회(팀원이면 누구나 가능) |
+
+```http
+GET /api/teams/{teamId}/activity-log
+Authorization: Bearer <Firebase ID Token>
+```
+
+예상 응답:
+
+```json
+[
+  {
+    "id": 1,
+    "actorId": 10,
+    "actorName": "김철수",
+    "targetUserId": 11,
+    "targetUserName": "이민아",
+    "action": "MEMBER_REMOVED",
+    "description": "김철수님이 이민아님을 팀에서 내보냈습니다.",
+    "createdAt": "2026-08-20T10:00:00Z"
+  }
+]
+```
+
+`action`은 다음 값을 사용합니다.
+
+```text
+MEMBER_REMOVED
+MEMBER_LEFT
+PM_TRANSFERRED
+OPINION_UPDATED_BY_PM
+OPINION_DELETED_BY_PM
+PROPOSAL_UPDATED_BY_PM
+PROPOSAL_DELETED_BY_PM
+```
+
+`targetUser`는 행위의 대상이 된 사용자입니다(예: 내보내진 팀원, 새 PM, 의견/제안의 원 작성자). 본인 스스로에 대한 행위(`MEMBER_LEFT`)는 `targetUserId`/`targetUserName`이 `null`입니다.
 
 ---
 
@@ -551,12 +930,26 @@ CONSENSUS_SUMMARY_COMPLETED
 | Auth         | POST   | `/api/auth/signup`                     | 회원가입        |
 | Auth         | POST   | `/api/auth/logout`                     | 로그아웃        |
 | User         | GET    | `/api/users/me`                        | 사용자 정보 조회   |
+| User         | PATCH  | `/api/users/me`                        | 사용자 정보 부분 수정 |
+| User         | GET    | `/api/users/search?email={email}`      | 이메일로 사용자 검색 |
+| Team         | POST   | `/api/teams`                           | 팀 생성        |
 | Team         | GET    | `/api/teams`                           | 팀 목록 조회     |
+| Team         | GET    | `/api/teams/{teamId}`                  | 팀 상세 조회     |
+| Team         | PATCH  | `/api/teams/{teamId}`                  | 팀 정보 수정     |
+| Team         | GET    | `/api/teams/{teamId}/members`          | 팀원 목록 조회    |
+| Team         | POST   | `/api/teams/{teamId}/members`          | 팀원 추가       |
+| Team         | DELETE | `/api/teams/{teamId}/members/{userId}` | 팀원 제거       |
+| Team         | DELETE | `/api/teams/{teamId}`                  | 팀 삭제(PM만)     |
+| Team         | POST   | `/api/teams/{teamId}/pm-transfer`      | PM 양도(PM만)     |
+| Team         | DELETE | `/api/teams/{teamId}/leave`            | 팀 나가기       |
+| Activity Log | GET    | `/api/teams/{teamId}/activity-log`     | 팀 활동 로그 조회   |
 | Proposal     | POST   | `/api/proposals`                       | 제안 생성       |
 | Proposal     | GET    | `/api/proposals`                       | 제안 목록 조회    |
 | Proposal     | GET    | `/api/proposals/{proposalId}`          | 제안 상세 조회    |
 | Proposal     | PUT    | `/api/proposals/{proposalId}`          | 제안 수정       |
 | Proposal     | DELETE | `/api/proposals/{proposalId}`          | 제안 삭제       |
+| Proposal     | POST   | `/api/proposals/{proposalId}/publish`  | 제안 게시 (DRAFT → OPEN) |
+| Proposal     | POST   | `/api/proposals/{proposalId}/complete` | 제안 완료 처리 (CONSENSUS_COMPLETED → COMPLETED) |
 | AI           | POST   | `/api/ai/context-analysis`             | 문화 맥락 분석    |
 | AI           | POST   | `/api/ai/consensus-summary`            | AI 합의 요약    |
 | AI           | POST   | `/api/ai/intent-analysis`              | 숨은 의도 분석    |
@@ -564,39 +957,57 @@ CONSENSUS_SUMMARY_COMPLETED
 | Opinion      | GET    | `/api/proposals/{proposalId}/opinions` | 의견 조회       |
 | Opinion      | PUT    | `/api/opinions/{opinionId}`            | 의견 수정       |
 | Opinion      | DELETE | `/api/opinions/{opinionId}`            | 의견 삭제       |
-| Dashboard    | GET    | `/api/dashboard/timezones`             | 팀원 시간대 조회   |
-| Dashboard    | GET    | `/api/dashboard/status`                | 응답 현황 조회    |
+| Dashboard    | GET    | `/api/dashboard/timezones?teamId={teamId}` | 팀원 시간대 조회 |
+| Dashboard    | GET    | `/api/dashboard/status?proposalId={proposalId}` | 응답 현황 조회 |
 | Notification | GET    | `/api/notifications`                   | 알림 목록 조회    |
 | Notification | PATCH  | `/api/notifications/{notificationId}`  | 알림 읽음 처리    |
+| Realtime     | WS     | `/ws/team-events?token={idToken}&teamId={teamId}` | 팀 단위 실시간 이벤트 구독 |
+| Friend       | POST   | `/api/friends/requests`                | 친구 요청 보내기   |
+| Friend       | GET    | `/api/friends/requests`                | 받은 요청 목록    |
+| Friend       | PATCH  | `/api/friends/requests/{requestId}`    | 요청 수락/거절    |
+| Friend       | GET    | `/api/friends`                         | 친구 목록 조회    |
+| Message      | POST   | `/api/messages`                        | 메시지 전송      |
+| Message      | GET    | `/api/messages/{friendUserId}`         | 특정 친구와의 대화 조회 |
+| Team Message | POST   | `/api/teams/{teamId}/messages`         | 팀 그룹 채팅 메시지 전송 |
+| Team Message | GET    | `/api/teams/{teamId}/messages`         | 팀 그룹 채팅 대화 조회 |
+| Team Invite  | POST   | `/api/teams/{teamId}/invites`          | 팀 초대 보내기(PM만) |
+| Team Invite  | GET    | `/api/teams/{teamId}/invites`          | 이 팀에서 보낸 초대 현황(PM만) |
+| Team Invite  | DELETE | `/api/teams/{teamId}/invites/{inviteId}` | 초대 취소(PM만)   |
+| Team Invite  | POST   | `/api/teams/{teamId}/invites/{inviteId}/resend` | 초대 다시 보내기(PM만) |
+| Team Invite  | GET    | `/api/team-invites`                    | 받은 팀 초대 목록  |
+| Team Invite  | PATCH  | `/api/team-invites/{inviteId}`         | 팀 초대 수락/거절  |
 
 ---
 
 # 13. Data Model
 
-핵심 데이터 구조는 다음과 같습니다.
+Meridian의 핵심 데이터 구조는 다음과 같습니다.
 
 ```text
 User
- ├── Team Membership
- └── Opinion
+ ├── Team Membership ──> Team
+ ├── Proposal (author)
+ ├── Opinion
+ └── Notification
 
 Team
- ├── Members
- └── Proposals
+ ├── Team Members
+ ├── Proposal
+ ├── Team Message
+ └── Activity Log
 
 Proposal
- ├── Team
- ├── Author
+ ├── Author (User)
+ ├── Target Team (Team)
+ ├── Target Cultures
+ ├── Culture Analyses
  ├── Opinions
- ├── AI Context Analysis
- └── AI Consensus Summary
+ ├── Consensus Summaries
+ └── Notifications
 
 Opinion
  ├── User
  └── Proposal
-
-Notification
- └── User
 ```
 
 ### 주요 Entity
@@ -605,39 +1016,63 @@ Notification
 
 ```text
 id
-firebaseUid
+firebaseUid      # Firebase Authentication 사용자 식별자 (UNIQUE)
+friendCode       # 친구/팀 초대에 쓰는 고유 코드 (UNIQUE, 예: "MER-7F3K")
 name
 email
-country
-timeZone
-location
+country         # 선택
+timeZone        # 선택, 기본값 UTC (JIT 생성 시 Firebase Token Claim에 없으면 UTC로 설정)
+location        # 선택
+cultureTag      # 선택
 createdAt
 updatedAt
 ```
+
+> 비밀번호는 PostgreSQL `users` 테이블에 저장하지 않습니다. 인증 정보는 Firebase Authentication이 관리하고, Backend DB에는 Firebase UID와 서비스 프로필 정보만 저장합니다.
 
 #### Team
 
 ```text
 id
 name
+country         # 선택: 팀의 대표/운영 국가
+cultureTag      # 선택
 createdAt
 updatedAt
 ```
+
+#### TeamMember
+
+```text
+teamId
+userId
+role
+joinedAt
+```
+
+`teamId + userId`를 복합 PK로 사용합니다.
 
 #### Proposal
 
 ```text
 id
-teamId
-authorId
 title
 content
-targetCultures
-deadline
+authorId
+targetTeamId
 status
+deadline        # 선택
+deadlineReminderSent  # 마감 임박(DEADLINE_APPROACHING) 알림을 이미 보냈는지(§11). 기본값 false
+decision        # 선택: 완료 처리 시 입력된 최종 의사결정 내용
+decidedBy       # 선택: 완료 처리한 사용자 ID
+completedAt     # 선택: 완료 처리 일시
 createdAt
 updatedAt
 ```
+
+대상 문화권은 `proposal_target_cultures`로 분리하여 여러 문화권을 저장합니다.
+
+`decision`, `decidedBy`, `completedAt`은 `POST /api/proposals/{proposalId}/complete` 호출 시 채워집니다.
 
 #### Opinion
 
@@ -645,17 +1080,21 @@ updatedAt
 id
 proposalId
 userId
-type
-content
+stance
+comment
+attachmentUrl   # 선택
 createdAt
 updatedAt
 ```
+
+`proposalId + userId` UNIQUE 제약으로 동일 사용자의 동일 제안 중복 의견을 방지합니다.
 
 #### Notification
 
 ```text
 id
 userId
+proposalId      # 선택
 type
 title
 content
@@ -663,11 +1102,281 @@ isRead
 createdAt
 ```
 
----
+### 13.1 ERD
+
+아래 ERD는 현재 API/기능 명세와 일치하도록 정리한 논리 모델입니다.
+
+#### 1) Users (사용자)
+
+**설명**
+
+서비스 사용자와 Firebase Authentication 연계 정보를 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 사용자 고유 ID (PK) |
+| `firebase_uid` | Firebase Authentication 사용자 ID (UNIQUE, NOT NULL) |
+| `friend_code` | 친구/팀 초대에 쓰는 고유 코드 (UNIQUE, 예: `MER-7F3K`) |
+| `name` | 사용자 이름 |
+| `email` | 이메일 (UNIQUE) |
+| `country` | 소속/대표 국가 (선택) |
+| `timezone` | 타임존 (예: `Asia/Seoul`, 선택, 기본값 `UTC`) |
+| `location` | 위치 정보 (선택) |
+| `culture_tag` | 문화권/커뮤니케이션 스타일 태그 (선택) |
+| `created_at` | 가입/생성 일시 |
+| `updated_at` | 수정 일시 |
+
+**관계**
+
+- `Users` : `Teams` = N:M (`team_members` 경유)
+- `Users` : `Proposals` = 1:N (작성자)
+- `Users` : `Opinions` = 1:N
+- `Users` : `Notifications` = 1:N
+
+> 비밀번호는 이 테이블에 저장하지 않습니다. 실제 인증 정보는 Firebase Authentication이 관리합니다.
+
+#### 2) Teams (팀)
+
+**설명**
+
+글로벌 협업의 기본 단위를 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 팀 고유 ID (PK) |
+| `name` | 팀명 |
+| `country` | 팀의 대표/운영 국가 (선택) |
+| `culture_tag` | 팀의 대표 문화/커뮤니케이션 스타일 태그 (선택) |
+| `created_at` | 생성 일시 |
+| `updated_at` | 수정 일시 |
+
+**관계**
+
+- `Teams` : `Users` = N:M (`team_members` 경유)
+- `Teams` : `Proposals` = 1:N
+
+> 팀은 여러 국가의 사용자를 포함할 수 있으므로 팀의 `country`와 사용자 개별 `country/timezone`은 별도 정보로 취급합니다.
+
+#### 3) Team_Members (팀 멤버)
+
+**설명**
+
+사용자와 팀의 소속 관계를 저장하는 조인 테이블입니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `team_id` | 팀 ID (PK, FK) |
+| `user_id` | 사용자 ID (PK, FK) |
+| `role` | 팀 내 역할 (예: `PM`, `MEMBER`) |
+| `joined_at` | 팀 가입 일시 |
+
+**제약**
+
+- PK: (`team_id`, `user_id`)
+- 동일 사용자의 동일 팀 중복 소속 금지
+
+> 팀 생성 시 생성자는 `role=PM`으로 자동 등록되며, 이후 팀원 추가/제거는 [Team API](#63-team)의 `POST/DELETE /api/teams/{teamId}/members` 로 관리합니다.
+
+#### 4) Proposals (제안)
+
+**설명**
+
+팀원에게 공유되는 협업 제안/안건을 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 제안 고유 ID (PK) |
+| `title` | 제안 제목 |
+| `content` | 제안 내용 |
+| `author_id` | 작성자 ID (FK → `users.id`) |
+| `target_team_id` | 대상 팀 ID (FK → `teams.id`) |
+| `status` | `DRAFT/OPEN/IN_PROGRESS/CONSENSUS_READY/CONSENSUS_COMPLETED/COMPLETED` |
+| `deadline` | 응답 마감 기한 (선택) |
+| `deadline_reminder_sent` | 마감 임박(`DEADLINE_APPROACHING`) 알림 발송 여부(§11), 기본값 `false` |
+| `decision` | 완료 처리 시 입력된 최종 의사결정 내용 (선택) |
+| `decided_by` | 완료 처리한 사용자 ID (FK → `users.id`, 선택) |
+| `completed_at` | 완료 처리 일시 (선택) |
+| `created_at` | 작성/생성 일시 |
+| `updated_at` | 수정 일시 |
+
+**관계**
+
+- 하나의 제안은 하나의 작성자(User)를 가집니다. (N:1)
+- 하나의 제안은 하나의 대상 팀(Team)을 가집니다. (N:1)
+- 하나의 제안은 여러 대상 문화권을 가질 수 있습니다. (1:N)
+- 하나의 제안은 여러 의견을 가집니다. (1:N)
+- 하나의 제안은 여러 문화 맥락 분석 결과를 가질 수 있습니다. (1:N)
+- 하나의 제안은 여러 AI 합의 요약 결과를 가질 수 있습니다. (1:N)
+
+#### 5) Proposal_Target_Cultures (제안 대상 문화권)
+
+**설명**
+
+제안이 전달/검토될 대상 문화권 목록을 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 고유 ID (PK) |
+| `proposal_id` | 제안 ID (FK → `proposals.id`) |
+| `culture_name` | 문화권 코드/명 (예: `KR`, `US`, `IN`, `BR`) |
+
+**제약**
+
+- (`proposal_id`, `culture_name`) UNIQUE
+
+#### 6) Culture_Analyses (AI 문화 맥락 분석)
+
+**설명**
+
+제안의 문화적 오해 가능성을 분석한 결과를 저장합니다. 제안 등록 전 분석이 가능하므로 `proposal_id`는 분석 시점에 없을 수 있습니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 고유 ID (PK) |
+| `proposal_id` | 제안 ID (FK, NULL 허용) |
+| `original_text` | 분석 대상 원문 |
+| `risk_level` | `LOW/MEDIUM/HIGH` |
+| `interpretation` | 문화권별 해석 결과 (JSON/JSONB 권장) |
+| `flagged_phrase` | 오해 가능 표현 (JSON/JSONB 권장) |
+| `suggested_rewrite` | AI 수정 제안 |
+| `applied` | 해당 수정안이 최종 제안에 적용되었는지 여부 |
+| `created_at` | 분석 일시 |
+
+**관계**
+
+- 하나의 제안은 여러 분석 이력을 가질 수 있습니다. (1:N)
+- 등록 전 분석은 `proposal_id = NULL`일 수 있으며, `POST /api/proposals` 호출 시 `cultureAnalysisIds`로 전달하면 `proposal_id`가 채워집니다.
+
+#### 7) Opinions (의견)
+
+**설명**
+
+팀원이 제안에 대해 남기는 비동기 의견을 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 의견 고유 ID (PK) |
+| `proposal_id` | 제안 ID (FK → `proposals.id`) |
+| `user_id` | 작성자 ID (FK → `users.id`) |
+| `stance` | `AGREE/DISAGREE/CONDITIONAL_AGREE` |
+| `comment` | 의견 내용 |
+| `attachment_url` | 첨부 파일 URL (선택) |
+| `created_at` | 작성 일시 |
+| `updated_at` | 수정 일시 |
+
+**제약**
+
+- (`proposal_id`, `user_id`) UNIQUE
+- 의견 유형과 코멘트를 하나의 최종 의견 레코드로 관리합니다.
+
+#### 8) Consensus_Summaries (AI 합의 요약)
+
+**설명**
+
+수집된 의견을 AI가 분석하여 합의 상태와 핵심 쟁점을 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 고유 ID (PK) |
+| `proposal_id` | 제안 ID (FK → `proposals.id`) |
+| `consensus_status` | `AGREED/PARTIAL/DISAGREED/PENDING` |
+| `summary` | 전체 요약 |
+| `key_issues` | 핵심 쟁점 (JSON/JSONB) |
+| `cultural_analysis` | 문화적 표현 분석 (JSON/JSONB) |
+| `hidden_opposition` | 숨은 반대/우려 분석 (JSON/JSONB) |
+| `recommended_actions` | 권장 후속 조치 |
+| `created_at` | 생성 일시 |
+
+**관계**
+
+- 하나의 제안은 여러 합의 요약 이력을 가질 수 있습니다. (1:N)
+- 최신 `created_at` 결과를 현재 합의 요약으로 사용할 수 있습니다.
+
+#### 9) Notifications (알림)
+
+**설명**
+
+사용자에게 전달된 협업 관련 알림을 저장합니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 알림 고유 ID (PK) |
+| `user_id` | 수신자 ID (FK → `users.id`) |
+| `proposal_id` | 관련 제안 ID (FK, nullable) |
+| `type` | `PROPOSAL_CREATED/PROPOSAL_UPDATED/OPINION_REQUESTED/DEADLINE_APPROACHING/CONSENSUS_SUMMARY_COMPLETED/FRIEND_REQUEST/TEAM_INVITE` |
+| `title` | 알림 제목 |
+| `content` | 알림 내용 |
+| `is_read` | 읽음 여부 |
+| `created_at` | 발송/생성 일시 |
+
+**관계**
+
+- 여러 알림은 하나의 사용자에게 속합니다. (N:1)
+- 알림은 특정 제안과 연결될 수 있습니다. (N:1, nullable)
+
+#### 10) Team_Messages (팀 그룹 채팅)
+
+**설명**
+
+팀 소속 팀원끼리 주고받는 그룹 채팅 메시지를 저장합니다. [Team Message API](#team-message-api) 참고.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 메시지 고유 ID (PK) |
+| `team_id` | 팀 ID (FK → `teams.id`) |
+| `sender_id` | 작성자 ID (FK → `users.id`) |
+| `content` | 메시지 내용 |
+| `created_at` | 작성 일시 |
+
+**관계**
+
+- 하나의 팀은 여러 팀 메시지를 가집니다. (1:N)
+- 하나의 팀 메시지는 하나의 작성자(User)를 가집니다. (N:1)
+
+#### 11) Activity_Logs (팀 활동 로그)
+
+**설명**
+
+팀 내 모더레이션(관리) 행위에 대한 감사 기록입니다. [Activity Log API](#activity-log-api) 참고.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 로그 고유 ID (PK) |
+| `team_id` | 팀 ID (FK → `teams.id`) |
+| `actor_id` | 행위를 수행한 사용자 ID (FK → `users.id`) |
+| `target_user_id` | 행위의 대상이 된 사용자 ID (FK → `users.id`, 선택 — 본인 스스로에 대한 행위는 NULL) |
+| `action` | `MEMBER_REMOVED/MEMBER_LEFT/PM_TRANSFERRED/OPINION_UPDATED_BY_PM/OPINION_DELETED_BY_PM/PROPOSAL_UPDATED_BY_PM/PROPOSAL_DELETED_BY_PM` |
+| `description` | 사람이 읽을 수 있는 설명 텍스트 |
+| `created_at` | 발생 일시 |
+
+**관계**
+
+- 하나의 팀은 여러 활동 로그를 가질 수 있습니다. (1:N)
+- 하나의 활동 로그는 하나의 행위자(User)를 가지며, 대상 사용자(User)를 가질 수 있습니다(선택). (N:1)
+
+### ERD 관계 요약
+
+```text
+Users
+  │
+  ├──< Team_Members >── Teams
+  │                       │
+  │                       ├──< Proposals
+  │                       │      ├──< Proposal_Target_Cultures
+  │                       │      ├──< Culture_Analyses
+  │                       │      ├──< Opinions >── Users
+  │                       │      └──< Consensus_Summaries
+  │                       │
+  │                       ├──< Team_Messages >── Users (sender)
+  │                       │
+  │                       └──< Activity_Logs >── Users (actor / target)
+  │
+  └──< Notifications >── Proposals (nullable)
+```
 
 # 14. Proposal Status
 
-제안의 진행 상태는 다음과 같이 관리합니다.
+제안의 진행 상태는 아래 값만 사용합니다.
 
 ```text
 DRAFT
@@ -678,20 +1387,27 @@ IN_PROGRESS
    ↓
 CONSENSUS_READY
    ↓
+CONSENSUS_COMPLETED
+   ↓
 COMPLETED
 ```
 
 ### 상태 설명
 
-| Status            | 설명          |
-| ----------------- | ----------- |
-| `DRAFT`           | 작성 중인 제안    |
-| `OPEN`            | 의견 수집 시작    |
-| `IN_PROGRESS`     | 팀원의 의견 수집 중 |
-| `CONSENSUS_READY` | AI 합의 요약 가능 |
-| `COMPLETED`       | 의사결정 완료     |
+| Status | 설명 | 전이 방법 |
+| --- | --- | --- |
+| `DRAFT` | 작성 중이며 아직 의견 수집을 시작하지 않은 제안 | `POST /api/proposals` 호출 시 초기값 |
+| `OPEN` | 의견 수집이 시작된 제안 | `POST /api/proposals/{proposalId}/publish` |
+| `IN_PROGRESS` | 하나 이상의 응답을 수집하고 있는 상태 | 팀원이 첫 의견 등록 시 시스템이 자동 전이 |
+| `CONSENSUS_READY` | 대상 팀원 전원이 응답을 완료해 AI 합의 요약을 실행할 수 있는(분석 가능) 상태 | 팀원이 의견을 등록해 전원 응답이 채워지는 시점에 시스템이 자동 전이 |
+| `CONSENSUS_COMPLETED` | AI 합의 요약 실행이 완료된(분석 완료) 상태 | `POST /api/ai/consensus-summary` 성공 시 시스템이 자동 전이 |
+| `COMPLETED` | 최종 의사결정이 완료된 상태 | `POST /api/proposals/{proposalId}/complete` |
 
----
+> `REVIEWING`, `CLOSED` 등은 사용하지 않습니다. 초안 검토가 필요하더라도 별도의 상태값으로 확장하지 않고 `DRAFT` 내부 단계로 관리합니다.
+>
+> `DRAFT`, `COMPLETED`를 제외한 모든 상태 전이는 사용자의 명시적 API 호출 없이 시스템이 자동으로 처리하며, 별도의 배치/스케줄러 없이 관련 API(의견 등록, 합의 요약) 호출 시점에 조건을 검사합니다.
+>
+> `CONSENSUS_READY`는 팀원 전원 응답이라는 하나의 조건만으로 판단하므로 의견 등록 시점에 즉시 전이됩니다. 반면 `deadline` 경과 여부는 별도 배치/스케줄러 없이 API 호출 시점에만 검사하므로, 의견이 하나도 제출되지 않은 채 `deadline`이 지난 경우는 `CONSENSUS_READY`를 거치지 않고 `POST /api/ai/consensus-summary` 호출 시 바로 `IN_PROGRESS`(또는 `OPEN`)에서 `CONSENSUS_COMPLETED`로 전이될 수 있습니다.
 
 # 15. Error Response
 
@@ -740,7 +1456,8 @@ FIREBASE_PROJECT_ID=
 FIREBASE_CLIENT_EMAIL=
 FIREBASE_PRIVATE_KEY=
 
-AI_API_KEY=
+OPENAI_API_KEY=
+OPENAI_MODEL=
 ```
 
 실제 API Key 및 Secret 값은 Git Repository에 업로드하지 않습니다.
@@ -785,6 +1502,30 @@ gradlew.bat bootRun
 ```text
 http://localhost:8080
 ```
+
+---
+
+## 로컬 DB 스키마 준비 (최초 1회 / pull 받아서 새 테이블이 추가됐을 때)
+
+`application.yml`이 `ddl-auto: validate`라서, Spring Boot가 스키마를 자동으로 만들어주지 않습니다. 실제 DB 테이블이 현재 Entity와 안 맞으면(테이블이 아예 없거나, 새로 추가된 테이블/컬럼이 없으면) **부팅 자체가 실패**합니다.
+
+1. Postgres에 DB/계정이 없다면 먼저 만듭니다.
+   ```bash
+   createdb meridian
+   ```
+2. `.env`를 준비합니다(`DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `FIREBASE_*`, `OPENAI_*` — 팀 채널 공유 값 사용).
+3. **최초 1회, 또는 `develop`을 pull 받은 뒤 새 테이블/컬럼이 추가된 걸 발견했을 때만** 아래처럼 `ddl-auto`를 일시적으로 `update`로 override해서 딱 한 번 부팅합니다. 부팅 로그에 `Hibernate: create table ...` / `alter table ... add column ...`이 찍히면 정상입니다. 서버가 뜨면(`Started MeridianApplication`) `Ctrl+C`로 바로 종료합니다.
+   ```bash
+   set -a && source .env && set +a
+   SPRING_JPA_HIBERNATE_DDL_AUTO=update ./gradlew bootRun
+   ```
+4. 이후에는 평소처럼 `.env`만 로드하고 그냥 실행하면 됩니다(`ddl-auto`는 다시 기본값인 `validate`로 동작).
+   ```bash
+   set -a && source .env && set +a
+   ./gradlew bootRun
+   ```
+
+> 3번 단계를 건너뛰고 계속 `update` 모드로 두면 스키마가 의도치 않게 바뀔 수 있어 권장하지 않습니다. 필요한 순간에만 한 번 켰다 끄는 용도로 씁니다.
 
 ---
 
@@ -838,15 +1579,24 @@ Firebase Functions는 외부 요청을 받아 Spring Backend API로 전달하는
 ```text
 Firebase Auth
     ↓
-/api/auth/*
+Token 검증 + JIT 사용자 프로필 동기화
     ↓
 /api/users/me
+    ↓
+(선택) /api/auth/*
 ```
+
+> `/api/auth/*`는 선택 endpoint이므로 JIT 프로필 동기화 구현 이후 필요 시 추가합니다.
 
 ### Phase 2 — Team
 
 ```text
-/api/teams
+POST   /api/teams
+GET    /api/teams
+GET    /api/teams/{teamId}
+GET    /api/teams/{teamId}/members
+POST   /api/teams/{teamId}/members
+DELETE /api/teams/{teamId}/members/{userId}
 ```
 
 ### Phase 3 — Proposal
@@ -857,6 +1607,7 @@ GET    /api/proposals
 GET    /api/proposals/{proposalId}
 PUT    /api/proposals/{proposalId}
 DELETE /api/proposals/{proposalId}
+POST   /api/proposals/{proposalId}/publish
 ```
 
 ### Phase 4 — Opinion
@@ -874,13 +1625,15 @@ DELETE /api/opinions/{opinionId}
 POST /api/ai/context-analysis
 POST /api/ai/intent-analysis
 POST /api/ai/consensus-summary
+    ↓
+POST /api/proposals/{proposalId}/complete
 ```
 
 ### Phase 6 — Dashboard
 
 ```text
-GET /api/dashboard/timezones
-GET /api/dashboard/status
+GET /api/dashboard/timezones?teamId={teamId}
+GET /api/dashboard/status?proposalId={proposalId}
 ```
 
 ### Phase 7 — Notification
@@ -898,13 +1651,14 @@ PATCH /api/notifications/{notificationId}
 
 ### P0 — 반드시 구현
 
-* Firebase Authentication
+* Firebase Authentication (+ JIT 사용자 프로필 동기화)
 * 사용자 정보
-* 팀 조회
-* 제안 생성 / 조회
+* 팀 생성 / 조회 / 팀원 관리
+* 제안 생성 / 조회 / 게시
 * 의견 등록 / 조회
 * AI 문화 맥락 분석
 * AI 합의 요약
+* 제안 완료 처리(최종 의사결정)
 
 ### P1 — 데모 완성도 향상
 
@@ -955,7 +1709,11 @@ Meridian의 핵심 데모 시나리오는 다음과 같습니다.
 
         ↓
 
-[제안 등록]
+[제안 등록 (DRAFT)]
+
+        ↓
+
+[제안 게시 (OPEN)]
 
         ↓
 
@@ -1007,6 +1765,12 @@ backend/
 │   │   │           ├── ai/
 │   │   │           ├── dashboard/
 │   │   │           ├── notification/
+│   │   │           ├── friend/
+│   │   │           ├── message/
+│   │   │           ├── teaminvite/
+│   │   │           ├── teammessage/
+│   │   │           ├── realtime/
+│   │   │           ├── activity/
 │   │   │           ├── common/
 │   │   │           └── config/
 │   │   └── resources/
