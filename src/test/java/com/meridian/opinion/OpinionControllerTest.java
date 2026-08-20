@@ -116,7 +116,7 @@ class OpinionControllerTest {
     }
 
     private OpinionResponse sampleResponse() {
-        return new OpinionResponse(1L, 100L, 2L, OpinionStance.AGREE, "동의합니다.", null,
+        return new OpinionResponse(1L, 100L, 2L, "Member", "KR", "ko-KR", OpinionStance.AGREE, "동의합니다.", null,
                 Instant.parse("2026-08-12T00:00:00Z"), Instant.parse("2026-08-12T00:00:00Z"));
     }
 }

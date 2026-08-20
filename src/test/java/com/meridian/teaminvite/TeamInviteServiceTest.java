@@ -209,6 +209,63 @@ class TeamInviteServiceTest {
     }
 
     @Test
+    void listsAllInvitesForTeamWhenCallerIsPm() {
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(true);
+        TeamInvite pending = TeamInvite.builder().id(5L).team(team).invitedUser(invitee).invitedBy(pm).status(TeamInviteStatus.PENDING).build();
+        when(teamInviteRepository.findAllByTeam_IdOrderByCreatedAtDesc(10L)).thenReturn(List.of(pending));
+
+        List<TeamInviteResponse> responses = teamInviteService.listForTeam(AUTH_HEADER, 10L);
+
+        assertThat(responses).hasSize(1);
+    }
+
+    @Test
+    void rejectsListForTeamWhenCallerIsNotPm() {
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(false);
+
+        assertThatThrownBy(() -> teamInviteService.listForTeam(AUTH_HEADER, 10L))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining("PM만");
+    }
+
+    @Test
+    void pmCancelsPendingInvite() {
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(true);
+        TeamInvite pending = TeamInvite.builder().id(5L).team(team).invitedUser(invitee).invitedBy(pm).status(TeamInviteStatus.PENDING).build();
+        when(teamInviteRepository.findById(5L)).thenReturn(Optional.of(pending));
+
+        teamInviteService.cancelInvite(AUTH_HEADER, 10L, 5L);
+
+        verify(teamInviteRepository).delete(pending);
+    }
+
+    @Test
+    void rejectsCancelForAlreadyResolvedInvite() {
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(true);
+        TeamInvite accepted = TeamInvite.builder().id(5L).team(team).invitedUser(invitee).invitedBy(pm).status(TeamInviteStatus.ACCEPTED).build();
+        when(teamInviteRepository.findById(5L)).thenReturn(Optional.of(accepted));
+
+        assertThatThrownBy(() -> teamInviteService.cancelInvite(AUTH_HEADER, 10L, 5L))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining("이미 처리된");
+    }
+
+    @Test
+    void pmResendsPendingInviteNotification() {
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(true);
+        TeamInvite pending = TeamInvite.builder().id(5L).team(team).invitedUser(invitee).invitedBy(pm).status(TeamInviteStatus.PENDING).build();
+        when(teamInviteRepository.findById(5L)).thenReturn(Optional.of(pending));
+
+        TeamInviteResponse response = teamInviteService.resendInvite(AUTH_HEADER, 10L, 5L);
+
+        assertThat(response.id()).isEqualTo(5L);
+        ArgumentCaptor<Notification> notificationCaptor = ArgumentCaptor.forClass(Notification.class);
+        verify(notificationRepository).save(notificationCaptor.capture());
+        assertThat(notificationCaptor.getValue().getUser()).isEqualTo(invitee);
+        assertThat(notificationCaptor.getValue().getType()).isEqualTo(NotificationType.TEAM_INVITE);
+    }
+
+    @Test
     void cannotRespondToAlreadyResolvedInvite() {
         when(userService.getCurrentUserEntity(AUTH_HEADER)).thenReturn(invitee);
         TeamInvite resolved = TeamInvite.builder().id(5L).team(team).invitedUser(invitee).invitedBy(pm).status(TeamInviteStatus.ACCEPTED).build();

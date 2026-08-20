@@ -195,7 +195,30 @@ class OpinionApiIntegrationTest {
     }
 
     @Test
-    void nonOwnerCannotUpdateOrDeleteOthersOpinion() throws Exception {
+    void nonOwnerNonPmCannotUpdateOrDeleteOthersOpinion() throws Exception {
+        Proposal proposal = openProposal();
+        String body = mockMvc.perform(post("/api/proposals/" + proposal.getId() + "/opinions")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer member-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(new OpinionRequest(OpinionStance.AGREE, "내용", null))))
+                .andReturn().getResponse().getContentAsString();
+        Long opinionId = objectMapper.readTree(body).get("id").asLong();
+
+        mockMvc.perform(put("/api/opinions/" + opinionId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer stranger-token")
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(new OpinionRequest(OpinionStance.DISAGREE, "가로채기 시도", null))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("OPINION_ACCESS_DENIED"));
+
+        mockMvc.perform(delete("/api/opinions/" + opinionId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer stranger-token"))
+                .andExpect(status().isForbidden());
+    }
+
+    /** PM은 팀 진행 관리 목적으로 다른 팀원의 의견도 수정/삭제할 수 있다(모더레이션). */
+    @Test
+    void teamPmCanUpdateAndDeleteOthersOpinion() throws Exception {
         Proposal proposal = openProposal();
         String body = mockMvc.perform(post("/api/proposals/" + proposal.getId() + "/opinions")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer member-token")
@@ -207,13 +230,13 @@ class OpinionApiIntegrationTest {
         mockMvc.perform(put("/api/opinions/" + opinionId)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer author-token")
                         .contentType("application/json")
-                        .content(objectMapper.writeValueAsString(new OpinionRequest(OpinionStance.DISAGREE, "가로채기 시도", null))))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error.code").value("OPINION_ACCESS_DENIED"));
+                        .content(objectMapper.writeValueAsString(new OpinionRequest(OpinionStance.DISAGREE, "PM 모더레이션", null))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").value("PM 모더레이션"));
 
         mockMvc.perform(delete("/api/opinions/" + opinionId)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer author-token"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isNoContent());
     }
 
     /**

@@ -1,7 +1,9 @@
 package com.meridian.opinion;
 
+import com.meridian.activity.ActivityLogService;
 import com.meridian.auth.AuthenticationException;
 import com.meridian.common.exception.DomainException;
+import com.meridian.notification.NotificationRepository;
 import com.meridian.proposal.Proposal;
 import com.meridian.proposal.ProposalService;
 import com.meridian.proposal.ProposalStatus;
@@ -23,7 +25,10 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -41,6 +46,10 @@ class OpinionServiceTest {
     private TeamMemberRepository teamMemberRepository;
     @Mock
     private TeamEventPublisher teamEventPublisher;
+    @Mock
+    private NotificationRepository notificationRepository;
+    @Mock
+    private ActivityLogService activityLogService;
 
     private OpinionService opinionService;
 
@@ -51,10 +60,11 @@ class OpinionServiceTest {
 
     @BeforeEach
     void setUp() {
-        opinionService = new OpinionService(userService, proposalService, opinionRepository, teamMemberRepository, teamEventPublisher);
+        opinionService = new OpinionService(userService, proposalService, opinionRepository, teamMemberRepository,
+                teamEventPublisher, notificationRepository, activityLogService);
 
-        author = User.builder().id(1L).firebaseUid("author-uid").build();
-        member = User.builder().id(2L).firebaseUid("member-uid").build();
+        author = User.builder().id(1L).firebaseUid("author-uid").name("Author").build();
+        member = User.builder().id(2L).firebaseUid("member-uid").name("Member").build();
         team = Team.builder().id(10L).name("Design Team").build();
         proposal = Proposal.builder().id(100L).title("Title").content("Content")
                 .author(author).targetTeam(team).status(ProposalStatus.OPEN).build();
@@ -270,6 +280,48 @@ class OpinionServiceTest {
                 .isInstanceOf(DomainException.class)
                 .extracting(ex -> ((DomainException) ex).getCode())
                 .isEqualTo("OPINION_ACCESS_DENIED");
+    }
+
+    @Test
+    void allowsUpdateByTeamPmAndNotifiesOwner() {
+        Opinion opinion = Opinion.builder().id(1L).proposal(proposal).user(author)
+                .stance(OpinionStance.AGREE).comment("원래 내용").build();
+        when(opinionRepository.findById(1L)).thenReturn(Optional.of(opinion));
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 2L, "PM")).thenReturn(true);
+
+        OpinionRequest request = new OpinionRequest(OpinionStance.DISAGREE, "PM이 수정", null);
+        OpinionResponse response = opinionService.updateOpinion(AUTH_HEADER, 1L, request);
+
+        assertThat(response.content()).isEqualTo("PM이 수정");
+        verify(notificationRepository).save(any(com.meridian.notification.Notification.class));
+        verify(activityLogService).record(eq(team), eq(member), eq(author),
+                eq(com.meridian.activity.ActivityAction.OPINION_UPDATED_BY_PM), any());
+    }
+
+    @Test
+    void allowsDeleteByTeamPmAndNotifiesOwner() {
+        Opinion opinion = Opinion.builder().id(1L).proposal(proposal).user(author)
+                .stance(OpinionStance.AGREE).comment("내용").build();
+        when(opinionRepository.findById(1L)).thenReturn(Optional.of(opinion));
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 2L, "PM")).thenReturn(true);
+
+        opinionService.deleteOpinion(AUTH_HEADER, 1L);
+
+        verify(notificationRepository).save(any(com.meridian.notification.Notification.class));
+        verify(activityLogService).record(eq(team), eq(member), eq(author),
+                eq(com.meridian.activity.ActivityAction.OPINION_DELETED_BY_PM), any());
+    }
+
+    @Test
+    void ownerUpdatingOwnOpinionDoesNotNotifyOrLog() {
+        Opinion opinion = Opinion.builder().id(1L).proposal(proposal).user(member)
+                .stance(OpinionStance.AGREE).comment("원래 내용").build();
+        when(opinionRepository.findById(1L)).thenReturn(Optional.of(opinion));
+
+        OpinionRequest request = new OpinionRequest(OpinionStance.DISAGREE, "직접 수정", null);
+        opinionService.updateOpinion(AUTH_HEADER, 1L, request);
+
+        verifyNoInteractions(notificationRepository, activityLogService);
     }
 
     @Test

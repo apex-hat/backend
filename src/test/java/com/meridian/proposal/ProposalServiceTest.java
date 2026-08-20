@@ -1,5 +1,7 @@
 package com.meridian.proposal;
 
+import com.meridian.activity.ActivityAction;
+import com.meridian.activity.ActivityLogService;
 import com.meridian.ai.CultureAnalysisRepository;
 import com.meridian.ai.ConsensusSummaryRepository;
 import com.meridian.auth.AuthenticationException;
@@ -32,8 +34,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -64,6 +68,8 @@ class ProposalServiceTest {
     private NotificationRepository notificationRepository;
     @Mock
     private TeamEventPublisher teamEventPublisher;
+    @Mock
+    private ActivityLogService activityLogService;
 
     private ProposalService proposalService;
 
@@ -74,9 +80,9 @@ class ProposalServiceTest {
     void setUp() {
         proposalService = new ProposalService(firebaseTokenVerifier, userRepository, teamRepository,
                 teamMemberRepository, proposalRepository, proposalTargetCultureRepository, cultureAnalysisRepository,
-                opinionRepository, consensusSummaryRepository, notificationRepository, teamEventPublisher);
+                opinionRepository, consensusSummaryRepository, notificationRepository, teamEventPublisher, activityLogService);
 
-        author = User.builder().id(1L).firebaseUid("firebase-uid").email("author@example.com").build();
+        author = User.builder().id(1L).firebaseUid("firebase-uid").email("author@example.com").name("Author").build();
         team = Team.builder().id(10L).name("Design Team").build();
 
         lenient().when(firebaseTokenVerifier.verify("id-token"))
@@ -203,6 +209,61 @@ class ProposalServiceTest {
                 .isInstanceOf(DomainException.class)
                 .extracting(ex -> ((DomainException) ex).getCode())
                 .isEqualTo("PROPOSAL_ACCESS_DENIED");
+    }
+
+    @Test
+    void updateProposalAllowedForTeamPmNonAuthorAndNotifiesOriginalAuthor() {
+        User teammate = User.builder().id(2L).name("Teammate").build();
+        Proposal proposal = draftProposal();
+        proposal.setAuthor(teammate);
+        proposal.setStatus(ProposalStatus.OPEN);
+        when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+        when(teamMemberRepository.existsByTeam_IdAndUser_Id(10L, 1L)).thenReturn(true);
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(true);
+        // 행위자(PM, id=1)도 실제로는 팀원이므로 목록에 포함시켜, PM이 본인 행위에 대한
+        // 알림을 받지 않는지(자기 알림 배제)까지 검증한다.
+        when(teamMemberRepository.findAllByTeam_Id(10L)).thenReturn(List.of(
+                TeamMember.builder().id(new TeamMemberId(10L, 1L)).team(team).user(author).role("PM").build(),
+                TeamMember.builder().id(new TeamMemberId(10L, 2L)).team(team).user(teammate).role("MEMBER").build()));
+
+        ProposalUpdateRequest request = new ProposalUpdateRequest("New", "New content", List.of(), null);
+        ProposalResponse response = proposalService.updateProposal(AUTH_HEADER, 100L, request);
+
+        assertThat(response.title()).isEqualTo("New");
+        verify(activityLogService).record(eq(team), eq(author), eq(teammate),
+                eq(ActivityAction.PROPOSAL_UPDATED_BY_PM), any());
+
+        // 팀 전체 알림(PROPOSAL_UPDATED)과 PM 모더레이션 알림(PROPOSAL_UPDATED_BY_PM)이 각각 1건씩,
+        // 총 2건 모두 원 작성자(teammate)에게만 가야 한다 — 행위자인 PM(author) 자신은 제외되어야 한다.
+        ArgumentCaptor<Notification> notificationCaptor = ArgumentCaptor.forClass(Notification.class);
+        verify(notificationRepository, times(2)).save(notificationCaptor.capture());
+        assertThat(notificationCaptor.getAllValues())
+                .extracting(Notification::getUser)
+                .containsOnly(teammate);
+        assertThat(notificationCaptor.getAllValues())
+                .extracting(Notification::getType)
+                .containsExactlyInAnyOrder(NotificationType.PROPOSAL_UPDATED, NotificationType.PROPOSAL_UPDATED_BY_PM);
+    }
+
+    @Test
+    void deleteProposalAllowedForTeamPmNonAuthorAndNotifiesOriginalAuthor() {
+        User teammate = User.builder().id(2L).name("Teammate").build();
+        Proposal proposal = draftProposal();
+        proposal.setAuthor(teammate);
+        proposal.setStatus(ProposalStatus.OPEN);
+        when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
+        when(teamMemberRepository.existsByTeam_IdAndUser_Id(10L, 1L)).thenReturn(true);
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(true);
+        when(cultureAnalysisRepository.findByProposal_Id(100L)).thenReturn(List.of());
+
+        proposalService.deleteProposal(AUTH_HEADER, 100L);
+
+        verify(activityLogService).record(eq(team), eq(author), eq(teammate),
+                eq(ActivityAction.PROPOSAL_DELETED_BY_PM), any());
+        ArgumentCaptor<Notification> notificationCaptor = ArgumentCaptor.forClass(Notification.class);
+        verify(notificationRepository).save(notificationCaptor.capture());
+        assertThat(notificationCaptor.getValue().getUser()).isEqualTo(teammate);
+        assertThat(notificationCaptor.getValue().getType()).isEqualTo(NotificationType.PROPOSAL_DELETED_BY_PM);
     }
 
     @Test

@@ -109,7 +109,7 @@ class ProposalControllerTest {
 
     @Test
     void publishesProposalAndReturns200() throws Exception {
-        ProposalResponse published = new ProposalResponse(100L, "Title", "Content", 1L, 10L, "Team", ProposalStatus.OPEN,
+        ProposalResponse published = new ProposalResponse(100L, "Title", "Content", 1L, "Author", 10L, "Team", ProposalStatus.OPEN,
                 List.of("KR"), null, null, null, null, Instant.parse("2026-08-12T00:00:00Z"), Instant.parse("2026-08-12T00:00:00Z"));
         when(proposalService.publishProposal("Bearer id-token", 100L)).thenReturn(published);
 
@@ -131,7 +131,7 @@ class ProposalControllerTest {
     @Test
     void completesProposalAndReturns200() throws Exception {
         ProposalCompleteRequest request = new ProposalCompleteRequest("B안을 채택합니다.");
-        ProposalResponse completed = new ProposalResponse(100L, "Title", "Content", 1L, 10L, "Team", ProposalStatus.COMPLETED,
+        ProposalResponse completed = new ProposalResponse(100L, "Title", "Content", 1L, "Author", 10L, "Team", ProposalStatus.COMPLETED,
                 List.of("KR"), null, "B안을 채택합니다.", 1L, Instant.parse("2026-08-12T00:00:00Z"),
                 Instant.parse("2026-08-12T00:00:00Z"), Instant.parse("2026-08-12T00:00:00Z"));
         when(proposalService.completeProposal(eq("Bearer id-token"), eq(100L), any(ProposalCompleteRequest.class)))
@@ -184,7 +184,7 @@ class ProposalControllerTest {
     }
 
     private ProposalResponse sampleResponse() {
-        return new ProposalResponse(100L, "Title", "Content", 1L, 10L, "Team", ProposalStatus.DRAFT,
+        return new ProposalResponse(100L, "Title", "Content", 1L, "Author", 10L, "Team", ProposalStatus.DRAFT,
                 List.of("KR"), null, null, null, null, Instant.parse("2026-08-12T00:00:00Z"), Instant.parse("2026-08-12T00:00:00Z"));
     }
 }
