@@ -60,7 +60,13 @@ public class Proposal {
 
     private Instant deadline;
 
-    /** 마감 임박 알림(DEADLINE_APPROACHING)을 이미 보냈는지. null/false는 아직 안 보낸 것으로 취급한다(기존 행과의 호환을 위해 nullable). */
+    /**
+     * 마감 임박 알림(DEADLINE_APPROACHING)을 이미 보냈는지. null/false는 아직 안 보낸 것으로 취급한다(기존 행과의 호환을 위해 nullable).
+     * {@link org.hibernate.annotations.OptimisticLock}(excluded = true)로 버전 증가 대상에서 제외한다 — 그렇지 않으면
+     * DeadlineReminderScheduler의 백그라운드 업데이트가 이 필드만 바꿔도 version이 올라가서, 동시에 들어온 사용자의
+     * 제안 수정/삭제 요청이 실제 내용 충돌이 없는데도 낙관적 잠금 충돌(409 CONFLICTING_UPDATE)로 실패할 수 있다.
+     */
+    @org.hibernate.annotations.OptimisticLock(excluded = true)
     private Boolean deadlineReminderSent;
 
     @Column(columnDefinition = "TEXT")
