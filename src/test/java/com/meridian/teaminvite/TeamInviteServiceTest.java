@@ -17,6 +17,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -115,6 +116,35 @@ class TeamInviteServiceTest {
         assertThatThrownBy(() -> teamInviteService.sendInvite(AUTH_HEADER, 10L, "MER-BBBB"))
                 .isInstanceOf(DomainException.class)
                 .hasMessageContaining("이미 초대");
+    }
+
+    @Test
+    void resendsRejectedInviteAndCreatesNotification() {
+        when(teamRepository.findById(10L)).thenReturn(Optional.of(team));
+        when(teamMemberRepository.existsByTeam_IdAndUser_IdAndRole(10L, 1L, "PM")).thenReturn(true);
+        when(userRepository.findByFriendCode("MER-BBBB")).thenReturn(Optional.of(invitee));
+        when(teamMemberRepository.existsByTeam_IdAndUser_Id(10L, 2L)).thenReturn(false);
+        TeamInvite rejected = TeamInvite.builder()
+                .id(5L)
+                .team(team)
+                .invitedUser(invitee)
+                .invitedBy(User.builder().id(3L).name("이전 PM").build())
+                .status(TeamInviteStatus.REJECTED)
+                .respondedAt(Instant.now())
+                .build();
+        when(teamInviteRepository.findByTeam_IdAndInvitedUser_Id(10L, 2L)).thenReturn(Optional.of(rejected));
+
+        TeamInviteResponse response = teamInviteService.sendInvite(AUTH_HEADER, 10L, "MER-BBBB");
+
+        assertThat(response.status()).isEqualTo(TeamInviteStatus.PENDING);
+        assertThat(rejected.getInvitedBy()).isEqualTo(pm);
+        assertThat(rejected.getRespondedAt()).isNull();
+        verify(teamInviteRepository).save(rejected);
+
+        ArgumentCaptor<Notification> notificationCaptor = ArgumentCaptor.forClass(Notification.class);
+        verify(notificationRepository).save(notificationCaptor.capture());
+        assertThat(notificationCaptor.getValue().getUser()).isEqualTo(invitee);
+        assertThat(notificationCaptor.getValue().getContent()).contains("초대했습니다");
     }
 
     @Test

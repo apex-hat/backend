@@ -19,6 +19,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -54,16 +55,25 @@ public class TeamInviteService {
         if (teamMemberRepository.existsByTeam_IdAndUser_Id(teamId, invitee.getId())) {
             throw DomainException.conflict("TEAM_MEMBER_ALREADY_EXISTS", "이미 이 팀에 속한 사용자입니다.");
         }
-        if (teamInviteRepository.findByTeam_IdAndInvitedUser_Id(teamId, invitee.getId()).isPresent()) {
-            throw DomainException.conflict("TEAM_INVITE_EXISTS", "이미 초대를 보냈거나 처리된 사용자입니다.");
+        Optional<TeamInvite> existingInvite = teamInviteRepository.findByTeam_IdAndInvitedUser_Id(teamId, invitee.getId());
+        TeamInvite invite;
+        if (existingInvite.isPresent()) {
+            invite = existingInvite.get();
+            if (invite.getStatus() != TeamInviteStatus.REJECTED) {
+                throw DomainException.conflict("TEAM_INVITE_EXISTS", "이미 초대를 보냈거나 처리된 사용자입니다.");
+            }
+            invite.setInvitedBy(inviter);
+            invite.setStatus(TeamInviteStatus.PENDING);
+            invite.setRespondedAt(null);
+        } else {
+            invite = TeamInvite.builder()
+                    .team(team)
+                    .invitedUser(invitee)
+                    .invitedBy(inviter)
+                    .status(TeamInviteStatus.PENDING)
+                    .build();
         }
-
-        TeamInvite invite = teamInviteRepository.save(TeamInvite.builder()
-                .team(team)
-                .invitedUser(invitee)
-                .invitedBy(inviter)
-                .status(TeamInviteStatus.PENDING)
-                .build());
+        invite = teamInviteRepository.save(invite);
 
         notificationRepository.save(Notification.builder()
                 .user(invitee)
