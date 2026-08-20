@@ -8,5 +8,6 @@ public enum ProposalStatus {
     OPEN,
     IN_PROGRESS,
     CONSENSUS_READY,
+    CONSENSUS_COMPLETED,
     COMPLETED
 }
