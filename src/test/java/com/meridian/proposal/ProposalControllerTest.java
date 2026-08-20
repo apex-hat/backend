@@ -139,14 +139,14 @@ class ProposalControllerTest {
     void completeRejectsNonConsensusReadyProposalWith409() throws Exception {
         ProposalCompleteRequest request = new ProposalCompleteRequest("B안을 채택합니다.");
         when(proposalService.completeProposal(eq("Bearer id-token"), eq(100L), any(ProposalCompleteRequest.class)))
-                .thenThrow(DomainException.conflict("PROPOSAL_NOT_CONSENSUS_READY", "CONSENSUS_READY 상태의 제안만 완료 처리할 수 있습니다."));
+                .thenThrow(DomainException.conflict("PROPOSAL_NOT_CONSENSUS_COMPLETED", "CONSENSUS_COMPLETED 상태의 제안만 완료 처리할 수 있습니다."));
 
         mockMvc.perform(post("/api/proposals/100/complete")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer id-token")
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.code").value("PROPOSAL_NOT_CONSENSUS_READY"));
+                .andExpect(jsonPath("$.error.code").value("PROPOSAL_NOT_CONSENSUS_COMPLETED"));
     }
 
     @Test
