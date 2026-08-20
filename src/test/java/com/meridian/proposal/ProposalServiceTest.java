@@ -1,10 +1,13 @@
 package com.meridian.proposal;
 
 import com.meridian.ai.CultureAnalysisRepository;
+import com.meridian.ai.ConsensusSummaryRepository;
 import com.meridian.auth.AuthenticationException;
 import com.meridian.auth.FirebaseTokenVerifier;
 import com.meridian.auth.FirebaseUserClaims;
 import com.meridian.common.exception.DomainException;
+import com.meridian.notification.NotificationRepository;
+import com.meridian.opinion.OpinionRepository;
 import com.meridian.team.Team;
 import com.meridian.team.TeamMemberRepository;
 import com.meridian.team.TeamRepository;
@@ -45,6 +48,12 @@ class ProposalServiceTest {
     private ProposalTargetCultureRepository proposalTargetCultureRepository;
     @Mock
     private CultureAnalysisRepository cultureAnalysisRepository;
+    @Mock
+    private OpinionRepository opinionRepository;
+    @Mock
+    private ConsensusSummaryRepository consensusSummaryRepository;
+    @Mock
+    private NotificationRepository notificationRepository;
 
     private ProposalService proposalService;
 
@@ -54,7 +63,8 @@ class ProposalServiceTest {
     @BeforeEach
     void setUp() {
         proposalService = new ProposalService(firebaseTokenVerifier, userRepository, teamRepository,
-                teamMemberRepository, proposalRepository, proposalTargetCultureRepository, cultureAnalysisRepository);
+                teamMemberRepository, proposalRepository, proposalTargetCultureRepository, cultureAnalysisRepository,
+                opinionRepository, consensusSummaryRepository, notificationRepository);
 
         author = User.builder().id(1L).firebaseUid("firebase-uid").email("author@example.com").build();
         team = Team.builder().id(10L).name("Design Team").build();
@@ -199,16 +209,16 @@ class ProposalServiceTest {
     }
 
     @Test
-    void updateProposalRejectsNonDraftStatus() {
+    void updateProposalAllowsPublishedActiveStatus() {
         Proposal proposal = draftProposal();
         proposal.setStatus(ProposalStatus.OPEN);
         when(proposalRepository.findById(100L)).thenReturn(Optional.of(proposal));
 
         ProposalUpdateRequest request = new ProposalUpdateRequest("New", "New content", List.of(), null);
 
-        assertThatThrownBy(() -> proposalService.updateProposal(AUTH_HEADER, 100L, request))
-                .isInstanceOf(DomainException.class)
-                .hasMessageContaining("DRAFT");
+        ProposalResponse response = proposalService.updateProposal(AUTH_HEADER, 100L, request);
+
+        assertThat(response.title()).isEqualTo("New");
     }
 
     @Test
