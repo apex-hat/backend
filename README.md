@@ -288,11 +288,12 @@ Authorization: Bearer <Firebase ID Token>
 | 팀 생성     | POST   | `/api/teams`                           | 새 팀 생성. 생성 요청자는 자동으로 `role=PM`으로 팀에 추가됨 |
 | 팀 목록 조회  | GET    | `/api/teams`                           | 사용자가 속한 팀 목록 조회                          |
 | 팀 상세 조회  | GET    | `/api/teams/{teamId}`                  | 팀 정보 조회                                     |
+| 팀 정보 수정  | PATCH  | `/api/teams/{teamId}`                  | 팀명 등 부분 수정 (`name`)                         |
 | 팀원 목록 조회 | GET    | `/api/teams/{teamId}/members`          | 팀에 속한 팀원 목록 조회                          |
 | 팀원 추가    | POST   | `/api/teams/{teamId}/members`          | 팀에 사용자 추가 (`userId`, `role`)                |
 | 팀원 제거    | DELETE | `/api/teams/{teamId}/members/{userId}` | 팀에서 사용자 제거                                |
 
-> 팀원 추가/제거는 해당 팀의 `role=PM`인 사용자만 수행할 수 있습니다.
+> 팀원 추가/제거, 팀 정보 수정은 해당 팀의 `role=PM`인 사용자만 수행할 수 있습니다.
 
 ---
 
@@ -359,7 +360,9 @@ GET /api/proposals/{proposalId}
 PUT /api/proposals/{proposalId}
 ```
 
-제안 정보를 수정합니다. `DRAFT` 상태의 제안만 수정할 수 있습니다. 게시 이후에는 내용을 변경할 수 없습니다.
+제안 정보를 수정합니다. `DRAFT`/`OPEN`/`IN_PROGRESS` 상태의 제안만 수정할 수 있습니다 — 대상 팀원 전원이 응답해 `CONSENSUS_READY`(분석 가능) 이상으로 넘어간 뒤에는 의견이 이미 특정 내용을 근거로 제출된 상태이므로 더 이상 수정할 수 없습니다.
+
+> `DRAFT`가 아닌 상태(이미 게시되어 팀원에게 보이는 상태)에서 수정되면, 작성자를 제외한 대상 팀 전체 팀원에게 `PROPOSAL_UPDATED` 알림이 발송됩니다(§11).
 
 ---
 
@@ -383,6 +386,8 @@ POST /api/proposals/{proposalId}/publish
 
 > 이후 팀원이 첫 의견을 등록하면 상태는 시스템에 의해 자동으로 `IN_PROGRESS`로 전환됩니다. 별도의 API 호출은 필요하지 않습니다.
 
+> 게시 시점에 작성자를 제외한 대상 팀 전체 팀원에게 `PROPOSAL_CREATED` 알림이 발송됩니다(`GET /api/notifications`로 조회). `DRAFT` 상태에서는 팀원에게 제안 자체가 보이지 않으므로(§7) 생성 시점이 아니라 게시 시점에 발송합니다.
+
 ---
 
 ## 제안 완료 처리
@@ -391,7 +396,7 @@ POST /api/proposals/{proposalId}/publish
 POST /api/proposals/{proposalId}/complete
 ```
 
-AI 합의 요약을 참고하여 최종 의사결정을 확정하고 제안을 종료합니다. `CONSENSUS_READY` 상태의 제안만 완료 처리할 수 있으며, 처리 후 상태는 `COMPLETED`로 변경됩니다.
+AI 합의 요약을 참고하여 최종 의사결정을 확정하고 제안을 종료합니다. `CONSENSUS_COMPLETED` 상태의 제안만 완료 처리할 수 있으며, 처리 후 상태는 `COMPLETED`로 변경됩니다.
 
 ### 주요 데이터
 
@@ -467,6 +472,8 @@ POST /api/ai/context-analysis
 
 > 이 분석은 **제안 최종 등록 전에 수행할 수 있으므로 `proposalId` 없이도 호출 가능**합니다. 제안 등록이 완료되면 해당 분석 이력을 `proposalId`와 연결할 수 있습니다.
 
+> `interpretation`/`suggestion`은 이 API를 호출한 사용자의 `country`에 대응하는 언어로 생성됩니다(매핑은 [9.2](#92-ai-합의-요약)의 합의 요약과 동일). `flaggedPhrases`는 원문에서 그대로 하이라이트할 수 있도록 번역하지 않고 원문 그대로 반환합니다.
+
 ### 분석 결과
 
 * 문화권별 해석
@@ -512,7 +519,9 @@ POST /api/ai/consensus-summary
 
 응답 인원이 부족하여 요약을 실행할 수 없는 경우에는 도메인 오류로 응답합니다.
 
-> 이 조건은 별도의 배치/스케줄러 없이 **API 호출 시점에 검사**합니다. 조건을 만족하면 Proposal 상태를 `CONSENSUS_READY`로 갱신한 뒤 합의 요약을 생성합니다. 이미 `CONSENSUS_READY` 이상인 제안에 대해 다시 호출하면 새로운 합의 요약 이력을 추가로 생성합니다(최신 이력이 현재 합의 요약으로 사용됨).
+> 이 조건은 별도의 배치/스케줄러 없이 **API 호출 시점에 검사**합니다. 실행에 성공하면 합의 요약을 생성한 뒤 Proposal 상태를 `CONSENSUS_COMPLETED`(분석 완료)로 갱신합니다(`COMPLETED`로 이미 넘어갔다면 유지). 대상 팀원 전원 응답이라는 조건 자체는 이 API 호출 이전, 마지막 팀원이 의견을 등록하는 시점에 `CONSENSUS_READY`(분석 가능)로 이미 반영되어 있습니다(§14). 이미 `CONSENSUS_COMPLETED` 이상인 제안에 다시 호출하면 새로운 합의 요약 이력을 추가로 생성합니다(최신 이력이 현재 합의 요약으로 사용됨).
+
+> 요약 텍스트(`summary`/`keyIssues`/`culturalAnalysis`/`hiddenOpposition`/`recommendedActions`)는 이 API를 호출한 사용자의 `country`에 대응하는 언어로 생성됩니다(`consensusStatus` 값 자체는 항상 영어 enum). 매핑은 프론트 `ProfilePage.tsx`의 `COUNTRY_LANGUAGE`와 동일하며, `country`가 없거나 매핑에 없는 국가면 영어로 생성됩니다.
 
 ### 분석 결과
 
@@ -658,6 +667,7 @@ PATCH /api/notifications/{notificationId}
 
 ```text
 PROPOSAL_CREATED
+PROPOSAL_UPDATED
 OPINION_REQUESTED
 DEADLINE_APPROACHING
 CONSENSUS_SUMMARY_COMPLETED
@@ -665,10 +675,45 @@ FRIEND_REQUEST
 ```
 
 > `notifications.type`도 위 값을 그대로 사용합니다.
+>
+> `PROPOSAL_CREATED`/`PROPOSAL_UPDATED`는 각각 [제안 게시](#제안-게시)·[제안 수정](#제안-수정)이 팀원에게 이미 공개된(=`DRAFT`가 아닌) 제안에 적용될 때, 작성자를 제외한 대상 팀 전체 팀원에게 발송됩니다.
 
 동일 이벤트에 대한 중복 알림은 방지합니다. `PROPOSAL_CREATED`, `OPINION_REQUESTED`, `CONSENSUS_SUMMARY_COMPLETED`처럼 사용자-제안 조합당 한 번만 발생해야 하는 이벤트는 알림 생성 전 `(user_id, proposal_id, type)` 조합으로 기존 알림 존재 여부를 확인해 중복 생성을 막습니다. `DEADLINE_APPROACHING`처럼 반복 발생이 정상인 이벤트는 대상에서 제외하고 발송 이력(예: 최근 발송 시각)을 기준으로 재발송 여부를 판단합니다.
 
 `FRIEND_REQUEST`는 아래 Friend API에서 친구 요청이 생성될 때 수신자에게 발송됩니다.
+
+## 실시간 이벤트 (WebSocket)
+
+```text
+ws(s)://<host>/ws/team-events?token={Firebase ID Token}&teamId={teamId}
+```
+
+같은 팀의 다른 팀원이 제안/의견을 생성·수정·삭제할 때, 대시보드를 열어 둔 다른 팀원에게 새로고침 없이 즉시 알리기 위한 채널입니다. 브라우저 `WebSocket` API는 커스텀 헤더를 보낼 수 없어 `Authorization` 헤더 대신 쿼리 파라미터 `token`으로 Firebase ID Token을 전달합니다. 연결 시점에 토큰을 검증하고 `teamId`에 실제로 소속된 팀원인지 확인하며, 아니면 연결을 거부합니다(`401`/`403`/`400`에 대응하는 handshake 실패).
+
+연결에 성공하면 아래 payload가 JSON 텍스트 메시지로 전송됩니다. 클라이언트는 `type`/`proposalId`로 부분 갱신을 시도하기보다, 수신 즉시 목록(제안/의견/알림)을 다시 조회(refetch)하는 용도로 사용하는 것을 권장합니다.
+
+```json
+{
+  "type": "PROPOSAL_CREATED",
+  "teamId": 10,
+  "proposalId": 100
+}
+```
+
+`type`은 아래 값을 사용하며, 각각 REST API 성공 시점에 발송됩니다.
+
+```text
+PROPOSAL_CREATED   — POST /api/proposals/{proposalId}/publish 성공 시
+PROPOSAL_UPDATED   — PUT /api/proposals/{proposalId} 성공 시 (DRAFT가 아닐 때만)
+PROPOSAL_DELETED   — DELETE /api/proposals/{proposalId} 성공 시 (DRAFT가 아니었을 때만)
+OPINION_CREATED    — POST /api/opinions 성공 시
+OPINION_UPDATED    — PUT /api/opinions/{opinionId} 성공 시
+OPINION_DELETED    — DELETE /api/opinions/{opinionId} 성공 시
+```
+
+> `DRAFT` 상태의 제안은 애초에 작성자 외에는 보이지 않으므로(§7), 그 상태에서의 생성/수정/삭제는 브로드캐스트하지 않습니다.
+>
+> 이벤트는 서버 인스턴스 메모리에 연결된 세션에만 전달되는 단일 인스턴스 브로드캐스트입니다(별도의 메시지 브로커 없음). 연결이 끊기면 클라이언트는 재연결을 시도해야 합니다.
 
 ---
 
@@ -746,6 +791,7 @@ Content-Type: application/json
 | Team         | POST   | `/api/teams`                           | 팀 생성        |
 | Team         | GET    | `/api/teams`                           | 팀 목록 조회     |
 | Team         | GET    | `/api/teams/{teamId}`                  | 팀 상세 조회     |
+| Team         | PATCH  | `/api/teams/{teamId}`                  | 팀 정보 수정     |
 | Team         | GET    | `/api/teams/{teamId}/members`          | 팀원 목록 조회    |
 | Team         | POST   | `/api/teams/{teamId}/members`          | 팀원 추가       |
 | Team         | DELETE | `/api/teams/{teamId}/members/{userId}` | 팀원 제거       |
@@ -755,7 +801,7 @@ Content-Type: application/json
 | Proposal     | PUT    | `/api/proposals/{proposalId}`          | 제안 수정       |
 | Proposal     | DELETE | `/api/proposals/{proposalId}`          | 제안 삭제       |
 | Proposal     | POST   | `/api/proposals/{proposalId}/publish`  | 제안 게시 (DRAFT → OPEN) |
-| Proposal     | POST   | `/api/proposals/{proposalId}/complete` | 제안 완료 처리 (CONSENSUS_READY → COMPLETED) |
+| Proposal     | POST   | `/api/proposals/{proposalId}/complete` | 제안 완료 처리 (CONSENSUS_COMPLETED → COMPLETED) |
 | AI           | POST   | `/api/ai/context-analysis`             | 문화 맥락 분석    |
 | AI           | POST   | `/api/ai/consensus-summary`            | AI 합의 요약    |
 | AI           | POST   | `/api/ai/intent-analysis`              | 숨은 의도 분석    |
@@ -767,6 +813,7 @@ Content-Type: application/json
 | Dashboard    | GET    | `/api/dashboard/status?proposalId={proposalId}` | 응답 현황 조회 |
 | Notification | GET    | `/api/notifications`                   | 알림 목록 조회    |
 | Notification | PATCH  | `/api/notifications/{notificationId}`  | 알림 읽음 처리    |
+| Realtime     | WS     | `/ws/team-events?token={idToken}&teamId={teamId}` | 팀 단위 실시간 이벤트 구독 |
 | Friend       | POST   | `/api/friends/requests`                | 친구 요청 보내기   |
 | Friend       | GET    | `/api/friends/requests`                | 받은 요청 목록    |
 | Friend       | PATCH  | `/api/friends/requests/{requestId}`    | 요청 수락/거절    |
@@ -982,7 +1029,7 @@ createdAt
 | `content` | 제안 내용 |
 | `author_id` | 작성자 ID (FK → `users.id`) |
 | `target_team_id` | 대상 팀 ID (FK → `teams.id`) |
-| `status` | `DRAFT/OPEN/IN_PROGRESS/CONSENSUS_READY/COMPLETED` |
+| `status` | `DRAFT/OPEN/IN_PROGRESS/CONSENSUS_READY/CONSENSUS_COMPLETED/COMPLETED` |
 | `deadline` | 응답 마감 기한 (선택) |
 | `decision` | 완료 처리 시 입력된 최종 의사결정 내용 (선택) |
 | `decided_by` | 완료 처리한 사용자 ID (FK → `users.id`, 선택) |
@@ -1094,7 +1141,7 @@ createdAt
 | `id` | 알림 고유 ID (PK) |
 | `user_id` | 수신자 ID (FK → `users.id`) |
 | `proposal_id` | 관련 제안 ID (FK, nullable) |
-| `type` | `PROPOSAL_CREATED/OPINION_REQUESTED/DEADLINE_APPROACHING/CONSENSUS_SUMMARY_COMPLETED` |
+| `type` | `PROPOSAL_CREATED/PROPOSAL_UPDATED/OPINION_REQUESTED/DEADLINE_APPROACHING/CONSENSUS_SUMMARY_COMPLETED/FRIEND_REQUEST` |
 | `title` | 알림 제목 |
 | `content` | 알림 내용 |
 | `is_read` | 읽음 여부 |
@@ -1134,6 +1181,8 @@ IN_PROGRESS
    ↓
 CONSENSUS_READY
    ↓
+CONSENSUS_COMPLETED
+   ↓
 COMPLETED
 ```
 
@@ -1144,14 +1193,15 @@ COMPLETED
 | `DRAFT` | 작성 중이며 아직 의견 수집을 시작하지 않은 제안 | `POST /api/proposals` 호출 시 초기값 |
 | `OPEN` | 의견 수집이 시작된 제안 | `POST /api/proposals/{proposalId}/publish` |
 | `IN_PROGRESS` | 하나 이상의 응답을 수집하고 있는 상태 | 팀원이 첫 의견 등록 시 시스템이 자동 전이 |
-| `CONSENSUS_READY` | 모든 팀원 응답이 완료되었거나 마감 기한이 지나 AI 합의 요약을 실행할 수 있는 상태 | `POST /api/ai/consensus-summary` 호출 시 조건 충족되면 시스템이 자동 전이 |
+| `CONSENSUS_READY` | 대상 팀원 전원이 응답을 완료해 AI 합의 요약을 실행할 수 있는(분석 가능) 상태 | 팀원이 의견을 등록해 전원 응답이 채워지는 시점에 시스템이 자동 전이 |
+| `CONSENSUS_COMPLETED` | AI 합의 요약 실행이 완료된(분석 완료) 상태 | `POST /api/ai/consensus-summary` 성공 시 시스템이 자동 전이 |
 | `COMPLETED` | 최종 의사결정이 완료된 상태 | `POST /api/proposals/{proposalId}/complete` |
 
-> `REVIEWING`, `CONSENSUS_DONE`, `CLOSED` 등은 사용하지 않습니다. 초안 검토가 필요하더라도 별도의 상태값으로 확장하지 않고 `DRAFT` 내부 단계로 관리합니다.
+> `REVIEWING`, `CLOSED` 등은 사용하지 않습니다. 초안 검토가 필요하더라도 별도의 상태값으로 확장하지 않고 `DRAFT` 내부 단계로 관리합니다.
 >
 > `DRAFT`, `COMPLETED`를 제외한 모든 상태 전이는 사용자의 명시적 API 호출 없이 시스템이 자동으로 처리하며, 별도의 배치/스케줄러 없이 관련 API(의견 등록, 합의 요약) 호출 시점에 조건을 검사합니다.
 >
-> 의견이 하나도 제출되지 않은 채 `deadline`이 경과한 경우, `IN_PROGRESS`를 거치지 않고 `OPEN`에서 바로 `CONSENSUS_READY`로 전이될 수 있습니다.
+> `CONSENSUS_READY`는 팀원 전원 응답이라는 하나의 조건만으로 판단하므로 의견 등록 시점에 즉시 전이됩니다. 반면 `deadline` 경과 여부는 별도 배치/스케줄러 없이 API 호출 시점에만 검사하므로, 의견이 하나도 제출되지 않은 채 `deadline`이 지난 경우는 `CONSENSUS_READY`를 거치지 않고 `POST /api/ai/consensus-summary` 호출 시 바로 `IN_PROGRESS`(또는 `OPEN`)에서 `CONSENSUS_COMPLETED`로 전이될 수 있습니다.
 
 # 15. Error Response
 
