@@ -295,10 +295,20 @@ Authorization: Bearer <Firebase ID Token>
 | 팀원 목록 조회 | GET    | `/api/teams/{teamId}/members`          | 팀에 속한 팀원 목록 조회                          |
 | 팀원 추가    | POST   | `/api/teams/{teamId}/members`          | 팀에 사용자 추가 (`userId`, `role`)                |
 | 팀원 제거    | DELETE | `/api/teams/{teamId}/members/{userId}` | 팀에서 사용자 제거                                |
+| 팀 삭제     | DELETE | `/api/teams/{teamId}`                  | 팀과 팀에 속한 제안/의견/문화분석/합의요약/알림/초대/팀 메시지/활동 로그를 모두 영구 삭제 |
+| PM 양도     | POST   | `/api/teams/{teamId}/pm-transfer`      | 호출자(PM)가 다른 팀원에게 `role=PM`을 넘기고 본인은 `role=MEMBER`로 전환 (`newPmUserId`) |
+| 팀 나가기    | DELETE | `/api/teams/{teamId}/leave`            | 호출자가 팀에서 탈퇴                              |
 
-> 팀원 추가/제거, 팀 정보 수정은 해당 팀의 `role=PM`인 사용자만 수행할 수 있습니다.
+> 팀원 추가/제거, 팀 정보 수정, 팀 삭제, PM 양도는 해당 팀의 `role=PM`인 사용자만 수행할 수 있습니다.
 
 > `POST /api/teams/{teamId}/members`는 상대의 동의 없이 즉시 팀원으로 추가한다. 상대의 동의(수락/거절)를 거쳐야 하는 초대 흐름은 아래 [Team Invite API](#team-invite-api)를 사용한다 — 새 팀원을 들일 때는 이쪽을 권장한다.
+
+### 팀 나가기 / PM 양도 규칙
+
+- 팀에는 항상 `role=PM`이 최소 1명 있어야 합니다. 본인이 그 팀의 유일한 PM이면 [PM 양도](#63-team)를 먼저 호출해 다른 팀원에게 PM을 넘긴 뒤에만 [팀 나가기](#63-team)를 호출할 수 있습니다(그렇지 않으면 `409 TEAM_PM_MUST_TRANSFER_FIRST`).
+- 다른 PM이 이미 있는 팀이라면(PM이 2명 이상) 위 제약 없이 바로 나갈 수 있습니다.
+- 팀원이 자기 자신뿐이라 양도할 대상이 없는 경우, 나가는 대신 팀 삭제를 사용해야 합니다.
+- `POST /api/teams/{teamId}/pm-transfer`에서 이미 PM인 자신을 대상으로 지정하면 `400 TEAM_PM_TRANSFER_TO_SELF`를 반환합니다.
 
 ---
 
@@ -343,9 +353,10 @@ POST /api/proposals
 
 ```http
 GET /api/proposals
+GET /api/proposals?teamId={teamId}
 ```
 
-사용자가 접근 가능한 제안 목록을 조회합니다.
+사용자가 접근 가능한 제안 목록을 조회합니다. `teamId`는 선택 쿼리 파라미터이며, 지정하면 해당 팀의 제안으로 결과를 필터링합니다.
 
 ---
 
@@ -367,7 +378,9 @@ PUT /api/proposals/{proposalId}
 
 제안 정보를 수정합니다. `DRAFT`/`OPEN`/`IN_PROGRESS` 상태의 제안만 수정할 수 있습니다 — 대상 팀원 전원이 응답해 `CONSENSUS_READY`(분석 가능) 이상으로 넘어간 뒤에는 의견이 이미 특정 내용을 근거로 제출된 상태이므로 더 이상 수정할 수 없습니다.
 
-> `DRAFT`가 아닌 상태(이미 게시되어 팀원에게 보이는 상태)에서 수정되면, 작성자를 제외한 대상 팀 전체 팀원에게 `PROPOSAL_UPDATED` 알림이 발송됩니다(§11).
+> **PM 모더레이션**: 작성자 본인 외에, 해당 제안의 대상 팀 `role=PM`인 사용자도 수정할 수 있습니다(팀 진행 관리 목적). PM이 다른 사람의 제안을 수정하면 작성자에게 `PROPOSAL_UPDATED_BY_PM` 알림이 별도로 발송되고, 팀의 [활동 로그](#activity-log-api)에 `PROPOSAL_UPDATED_BY_PM` 기록이 남습니다.
+
+> `DRAFT`가 아닌 상태(이미 게시되어 팀원에게 보이는 상태)에서 수정되면, 실제 수정을 수행한 사용자(작성자 또는 모더레이션한 PM)를 제외한 대상 팀 전체 팀원에게 `PROPOSAL_UPDATED` 알림이 발송됩니다(§11).
 
 ---
 
@@ -377,7 +390,11 @@ PUT /api/proposals/{proposalId}
 DELETE /api/proposals/{proposalId}
 ```
 
-제안을 삭제합니다. `DRAFT` 상태의 제안만 삭제할 수 있습니다.
+제안을 삭제합니다. `DRAFT`/`OPEN`/`IN_PROGRESS` 상태의 제안만 삭제할 수 있습니다 — [제안 수정](#제안-수정)과 동일하게, 대상 팀원 전원이 응답해 `CONSENSUS_READY`(분석 가능) 이상으로 넘어간 뒤에는 삭제할 수 없습니다.
+
+> **PM 모더레이션**: [제안 수정](#제안-수정)과 동일하게, 작성자 본인 외에 대상 팀의 `role=PM`인 사용자도 삭제할 수 있습니다. PM이 다른 사람의 제안을 삭제하면 작성자에게 `PROPOSAL_DELETED_BY_PM` 알림이 발송되고, 팀의 [활동 로그](#activity-log-api)에 기록이 남습니다(삭제된 제안이므로 이 알림은 특정 `proposalId`를 참조하지 않습니다).
+
+> `DRAFT`가 아닌 상태(이미 게시되어 팀원에게 보이는 상태)에서 삭제되면, 접속 중인 팀원에게 `PROPOSAL_DELETED` WebSocket 이벤트가 브로드캐스트됩니다(§11).
 
 ---
 
@@ -441,6 +458,8 @@ PUT /api/opinions/{opinionId}
 ```http
 DELETE /api/opinions/{opinionId}
 ```
+
+> **PM 모더레이션**: 의견 수정/삭제는 본인 의견이 아니어도, 해당 제안의 대상 팀 `role=PM`인 사용자면 수행할 수 있습니다(팀 진행 관리 목적). PM이 다른 사람의 의견을 수정/삭제하면 원 작성자에게 각각 `OPINION_UPDATED_BY_PM`/`OPINION_DELETED_BY_PM` 알림이 발송되고, 팀의 [활동 로그](#activity-log-api)에 기록이 남습니다.
 
 ### 의견 유형
 
@@ -673,20 +692,28 @@ PATCH /api/notifications/{notificationId}
 ```text
 PROPOSAL_CREATED
 PROPOSAL_UPDATED
-OPINION_REQUESTED
+OPINION_REQUESTED             (미구현: 아직 발송 트리거 없음)
 DEADLINE_APPROACHING
-CONSENSUS_SUMMARY_COMPLETED
+CONSENSUS_SUMMARY_COMPLETED   (미구현: 아직 발송 트리거 없음)
 FRIEND_REQUEST
 TEAM_INVITE
+OPINION_UPDATED_BY_PM
+OPINION_DELETED_BY_PM
+PROPOSAL_UPDATED_BY_PM
+PROPOSAL_DELETED_BY_PM
 ```
 
-> `notifications.type`도 위 값을 그대로 사용합니다.
+> `notifications.type`도 위 값을 그대로 사용합니다. `OPINION_REQUESTED`/`CONSENSUS_SUMMARY_COMPLETED`는 데이터 모델(enum)에는 정의되어 있지만, 이를 실제로 생성·발송하는 서비스 로직은 아직 구현되지 않았습니다(향후 구현 예정). 나머지 타입은 모두 실제로 발송됩니다.
 >
-> `PROPOSAL_CREATED`/`PROPOSAL_UPDATED`는 각각 [제안 게시](#제안-게시)·[제안 수정](#제안-수정)이 팀원에게 이미 공개된(=`DRAFT`가 아닌) 제안에 적용될 때, 작성자를 제외한 대상 팀 전체 팀원에게 발송됩니다.
+> `PROPOSAL_CREATED`/`PROPOSAL_UPDATED`는 각각 [제안 게시](#제안-게시)·[제안 수정](#제안-수정)이 팀원에게 이미 공개된(=`DRAFT`가 아닌) 제안에 적용될 때, 실제로 그 동작을 수행한 사용자(작성자 또는 [모더레이션한 PM](#제안-수정))를 제외한 대상 팀 전체 팀원에게 발송됩니다.
+>
+> `OPINION_UPDATED_BY_PM`/`OPINION_DELETED_BY_PM`/`PROPOSAL_UPDATED_BY_PM`/`PROPOSAL_DELETED_BY_PM`은 PM이 본인이 작성하지 않은 의견/제안을 모더레이션 목적으로 수정·삭제했을 때, 원 작성자에게만 발송됩니다(§7 [제안 수정](#제안-수정)/[제안 삭제](#제안-삭제), §8 Opinion API 참고). 같은 행위는 팀의 [활동 로그](#activity-log-api)에도 함께 기록됩니다.
+>
+> `DEADLINE_APPROACHING`은 별도 스케줄러(15분 주기)가 마감이 24시간 이내로 임박했지만 아직 의견 수집 중(`OPEN`/`IN_PROGRESS`)인 제안을 찾아, 아직 의견을 남기지 않은 대상 팀원에게 발송합니다. 같은 제안에 대해 한 번만 발송되도록 `proposals.deadline_reminder_sent` 플래그로 재발송을 막습니다(§13).
 
-동일 이벤트에 대한 중복 알림은 방지합니다. `PROPOSAL_CREATED`, `OPINION_REQUESTED`, `CONSENSUS_SUMMARY_COMPLETED`처럼 사용자-제안 조합당 한 번만 발생해야 하는 이벤트는 알림 생성 전 `(user_id, proposal_id, type)` 조합으로 기존 알림 존재 여부를 확인해 중복 생성을 막습니다. `DEADLINE_APPROACHING`처럼 반복 발생이 정상인 이벤트는 대상에서 제외하고 발송 이력(예: 최근 발송 시각)을 기준으로 재발송 여부를 판단합니다.
+동일 이벤트에 대한 중복 알림은 방지하도록 설계되어 있습니다. `PROPOSAL_CREATED`, `OPINION_REQUESTED`, `CONSENSUS_SUMMARY_COMPLETED`처럼 사용자-제안 조합당 한 번만 발생해야 하는 이벤트는 알림 생성 전 `(user_id, proposal_id, type)` 조합으로 기존 알림 존재 여부를 확인해 중복 생성을 막습니다. `DEADLINE_APPROACHING`은 반복 발생이 정상인 이벤트이므로 이 조합 기준 대신, 위에서 설명한 제안 단위 `deadline_reminder_sent` 플래그로 재발송 여부를 판단합니다. (`OPINION_REQUESTED`/`CONSENSUS_SUMMARY_COMPLETED`는 발송 로직 자체가 아직 없어 이 중복 방지 규칙도 해당 로직 구현 시 함께 적용됩니다.)
 
-`FRIEND_REQUEST`는 아래 Friend API에서 친구 요청이 생성될 때, `TEAM_INVITE`는 [Team Invite API](#team-invite-api)에서 팀 초대가 생성될 때 수신자에게 발송됩니다.
+`FRIEND_REQUEST`는 아래 Friend API에서 친구 요청이 생성될 때, `TEAM_INVITE`는 [Team Invite API](#team-invite-api)에서 팀 초대가 생성되거나 다시 보내질 때 수신자에게 발송됩니다.
 
 ## 실시간 이벤트 (WebSocket)
 
@@ -715,6 +742,7 @@ PROPOSAL_DELETED   — DELETE /api/proposals/{proposalId} 성공 시 (DRAFT가 �
 OPINION_CREATED    — POST /api/opinions 성공 시
 OPINION_UPDATED    — PUT /api/opinions/{opinionId} 성공 시
 OPINION_DELETED    — DELETE /api/opinions/{opinionId} 성공 시
+MESSAGE_CREATED    — POST /api/teams/{teamId}/messages 성공 시 (아래 Team Message API)
 ```
 
 > `DRAFT` 상태의 제안은 애초에 작성자 외에는 보이지 않으므로(§7), 그 상태에서의 생성/수정/삭제는 브로드캐스트하지 않습니다.
@@ -784,15 +812,41 @@ Content-Type: application/json
 
 ---
 
+## Team Message API
+
+팀에 소속된 팀원끼리 주고받는 그룹 채팅입니다. 1:1 [Message API](#message-api)와 달리 친구 관계가 아니어도 같은 팀 소속이면 대화할 수 있으며, 별도의 대화방 개념 없이 `teamId` 하나로 대화가 정해집니다.
+
+| 기능      | Method | Endpoint                        | 설명                          |
+| ------- | ------ | --------------------------------- | --------------------------- |
+| 메시지 전송  | POST   | `/api/teams/{teamId}/messages`    | `content`로 팀 전체에 메시지 전송     |
+| 대화 조회   | GET    | `/api/teams/{teamId}/messages`    | 해당 팀의 전체 대화 내역 조회           |
+
+```http
+POST /api/teams/{teamId}/messages
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "content": "안녕하세요!"
+}
+```
+
+요청 사용자가 해당 팀 소속이 아니면 `403`을 반환합니다. 메시지 전송에 성공하면 같은 팀의 다른 팀원에게 WebSocket으로 `MESSAGE_CREATED` 이벤트가 브로드캐스트됩니다(§11). 읽음 처리 개념은 없으며, 실시간 갱신은 WebSocket 수신 시 클라이언트가 대화 목록을 다시 조회(refetch)하는 방식을 전제로 합니다.
+
+---
+
 ## Team Invite API
 
 팀 PM이 사용자의 고유 ID(`friendCode`)로 팀 초대를 보내고, 상대가 수락해야 실제로 팀원이 되는 흐름입니다. `POST /api/teams/{teamId}/members`(즉시 추가)와 달리, 수락 전까지는 `team_members`에 아무 영향도 주지 않습니다.
 
-| 기능       | Method | Endpoint                        | 설명                              |
-| -------- | ------ | -------------------------------- | -------------------------------- |
-| 초대 보내기   | POST   | `/api/teams/{teamId}/invites`    | `friendCode`로 초대 전송(PM만)     |
-| 받은 초대 목록 | GET    | `/api/team-invites`               | 나에게 온 PENDING 상태 초대 목록    |
-| 초대 수락/거절 | PATCH  | `/api/team-invites/{inviteId}`    | `accept: true/false`로 응답     |
+| 기능        | Method | Endpoint                                    | 설명                              |
+| --------- | ------ | --------------------------------------------- | -------------------------------- |
+| 초대 보내기    | POST   | `/api/teams/{teamId}/invites`                 | `friendCode`로 초대 전송(PM만)     |
+| 보낸 초대 현황  | GET    | `/api/teams/{teamId}/invites`                 | 이 팀에서 보낸 초대 전체(대기/수락/거절) 조회(PM만) |
+| 초대 취소     | DELETE | `/api/teams/{teamId}/invites/{inviteId}`      | 아직 응답하지 않은(PENDING) 초대 취소(PM만) |
+| 초대 다시 보내기 | POST   | `/api/teams/{teamId}/invites/{inviteId}/resend` | PENDING 초대에 알림을 한 번 더 발송(PM만, 초대 자체는 유지) |
+| 받은 초대 목록  | GET    | `/api/team-invites`                           | 나에게 온 PENDING 상태 초대 목록    |
+| 초대 수락/거절  | PATCH  | `/api/team-invites/{inviteId}`                | `accept: true/false`로 응답     |
 
 ```http
 POST /api/teams/{teamId}/invites
@@ -818,6 +872,54 @@ Content-Type: application/json
 
 초대받은 본인만 응답할 수 있으며(`403 TEAM_INVITE_ACCESS_DENIED`), 이미 처리된 초대에 다시 응답하면 `409 TEAM_INVITE_ALREADY_RESOLVED`를 반환합니다. 수락(`accept: true`) 시 그 순간 실제 `team_members` row가 생성됩니다.
 
+초대 취소/다시 보내기는 PENDING 상태의 초대에만 가능하며, 이미 수락/거절된 초대이거나 다른 팀의 초대 ID면 `409 TEAM_INVITE_ALREADY_RESOLVED` 또는 `404 TEAM_INVITE_NOT_FOUND`를 반환합니다. 다시 보내기는 초대 상태를 바꾸지 않고 `TEAM_INVITE` 알림만 한 번 더 생성합니다(리마인더 목적).
+
+---
+
+## Activity Log API
+
+팀원 누구나 볼 수 있는, 팀 내 모더레이션(관리) 행위에 대한 감사 기록입니다. 팀원 제거, PM 양도, PM의 의견/제안 모더레이션(수정·삭제) 등 다른 팀원에게 영향을 주는 행위가 발생할 때마다 자동으로 기록됩니다.
+
+| 기능      | Method | Endpoint                          | 설명                     |
+| ------- | ------ | ------------------------------------ | ------------------------ |
+| 활동 로그 조회 | GET    | `/api/teams/{teamId}/activity-log`   | 팀의 활동 로그를 최신순으로 조회(팀원이면 누구나 가능) |
+
+```http
+GET /api/teams/{teamId}/activity-log
+Authorization: Bearer <Firebase ID Token>
+```
+
+예상 응답:
+
+```json
+[
+  {
+    "id": 1,
+    "actorId": 10,
+    "actorName": "김철수",
+    "targetUserId": 11,
+    "targetUserName": "이민아",
+    "action": "MEMBER_REMOVED",
+    "description": "김철수님이 이민아님을 팀에서 내보냈습니다.",
+    "createdAt": "2026-08-20T10:00:00Z"
+  }
+]
+```
+
+`action`은 다음 값을 사용합니다.
+
+```text
+MEMBER_REMOVED
+MEMBER_LEFT
+PM_TRANSFERRED
+OPINION_UPDATED_BY_PM
+OPINION_DELETED_BY_PM
+PROPOSAL_UPDATED_BY_PM
+PROPOSAL_DELETED_BY_PM
+```
+
+`targetUser`는 행위의 대상이 된 사용자입니다(예: 내보내진 팀원, 새 PM, 의견/제안의 원 작성자). 본인 스스로에 대한 행위(`MEMBER_LEFT`)는 `targetUserId`/`targetUserName`이 `null`입니다.
+
 ---
 
 # 12. 전체 API Endpoint
@@ -837,6 +939,10 @@ Content-Type: application/json
 | Team         | GET    | `/api/teams/{teamId}/members`          | 팀원 목록 조회    |
 | Team         | POST   | `/api/teams/{teamId}/members`          | 팀원 추가       |
 | Team         | DELETE | `/api/teams/{teamId}/members/{userId}` | 팀원 제거       |
+| Team         | DELETE | `/api/teams/{teamId}`                  | 팀 삭제(PM만)     |
+| Team         | POST   | `/api/teams/{teamId}/pm-transfer`      | PM 양도(PM만)     |
+| Team         | DELETE | `/api/teams/{teamId}/leave`            | 팀 나가기       |
+| Activity Log | GET    | `/api/teams/{teamId}/activity-log`     | 팀 활동 로그 조회   |
 | Proposal     | POST   | `/api/proposals`                       | 제안 생성       |
 | Proposal     | GET    | `/api/proposals`                       | 제안 목록 조회    |
 | Proposal     | GET    | `/api/proposals/{proposalId}`          | 제안 상세 조회    |
@@ -862,7 +968,12 @@ Content-Type: application/json
 | Friend       | GET    | `/api/friends`                         | 친구 목록 조회    |
 | Message      | POST   | `/api/messages`                        | 메시지 전송      |
 | Message      | GET    | `/api/messages/{friendUserId}`         | 특정 친구와의 대화 조회 |
+| Team Message | POST   | `/api/teams/{teamId}/messages`         | 팀 그룹 채팅 메시지 전송 |
+| Team Message | GET    | `/api/teams/{teamId}/messages`         | 팀 그룹 채팅 대화 조회 |
 | Team Invite  | POST   | `/api/teams/{teamId}/invites`          | 팀 초대 보내기(PM만) |
+| Team Invite  | GET    | `/api/teams/{teamId}/invites`          | 이 팀에서 보낸 초대 현황(PM만) |
+| Team Invite  | DELETE | `/api/teams/{teamId}/invites/{inviteId}` | 초대 취소(PM만)   |
+| Team Invite  | POST   | `/api/teams/{teamId}/invites/{inviteId}/resend` | 초대 다시 보내기(PM만) |
 | Team Invite  | GET    | `/api/team-invites`                    | 받은 팀 초대 목록  |
 | Team Invite  | PATCH  | `/api/team-invites/{inviteId}`         | 팀 초대 수락/거절  |
 
@@ -881,7 +992,9 @@ User
 
 Team
  ├── Team Members
- └── Proposal
+ ├── Proposal
+ ├── Team Message
+ └── Activity Log
 
 Proposal
  ├── Author (User)
@@ -904,6 +1017,7 @@ Opinion
 ```text
 id
 firebaseUid      # Firebase Authentication 사용자 식별자 (UNIQUE)
+friendCode       # 친구/팀 초대에 쓰는 고유 코드 (UNIQUE, 예: "MER-7F3K")
 name
 email
 country         # 선택
@@ -948,6 +1062,7 @@ authorId
 targetTeamId
 status
 deadline        # 선택
+deadlineReminderSent  # 마감 임박(DEADLINE_APPROACHING) 알림을 이미 보냈는지(§11). 기본값 false
 decision        # 선택: 완료 처리 시 입력된 최종 의사결정 내용
 decidedBy       # 선택: 완료 처리한 사용자 ID
 completedAt     # 선택: 완료 처리 일시
@@ -1001,6 +1116,7 @@ createdAt
 | --- | --- |
 | `id` | 사용자 고유 ID (PK) |
 | `firebase_uid` | Firebase Authentication 사용자 ID (UNIQUE, NOT NULL) |
+| `friend_code` | 친구/팀 초대에 쓰는 고유 코드 (UNIQUE, 예: `MER-7F3K`) |
 | `name` | 사용자 이름 |
 | `email` | 이메일 (UNIQUE) |
 | `country` | 소속/대표 국가 (선택) |
@@ -1076,6 +1192,7 @@ createdAt
 | `target_team_id` | 대상 팀 ID (FK → `teams.id`) |
 | `status` | `DRAFT/OPEN/IN_PROGRESS/CONSENSUS_READY/CONSENSUS_COMPLETED/COMPLETED` |
 | `deadline` | 응답 마감 기한 (선택) |
+| `deadline_reminder_sent` | 마감 임박(`DEADLINE_APPROACHING`) 알림 발송 여부(§11), 기본값 `false` |
 | `decision` | 완료 처리 시 입력된 최종 의사결정 내용 (선택) |
 | `decided_by` | 완료 처리한 사용자 ID (FK → `users.id`, 선택) |
 | `completed_at` | 완료 처리 일시 (선택) |
@@ -1197,6 +1314,46 @@ createdAt
 - 여러 알림은 하나의 사용자에게 속합니다. (N:1)
 - 알림은 특정 제안과 연결될 수 있습니다. (N:1, nullable)
 
+#### 10) Team_Messages (팀 그룹 채팅)
+
+**설명**
+
+팀 소속 팀원끼리 주고받는 그룹 채팅 메시지를 저장합니다. [Team Message API](#team-message-api) 참고.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 메시지 고유 ID (PK) |
+| `team_id` | 팀 ID (FK → `teams.id`) |
+| `sender_id` | 작성자 ID (FK → `users.id`) |
+| `content` | 메시지 내용 |
+| `created_at` | 작성 일시 |
+
+**관계**
+
+- 하나의 팀은 여러 팀 메시지를 가집니다. (1:N)
+- 하나의 팀 메시지는 하나의 작성자(User)를 가집니다. (N:1)
+
+#### 11) Activity_Logs (팀 활동 로그)
+
+**설명**
+
+팀 내 모더레이션(관리) 행위에 대한 감사 기록입니다. [Activity Log API](#activity-log-api) 참고.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `id` | 로그 고유 ID (PK) |
+| `team_id` | 팀 ID (FK → `teams.id`) |
+| `actor_id` | 행위를 수행한 사용자 ID (FK → `users.id`) |
+| `target_user_id` | 행위의 대상이 된 사용자 ID (FK → `users.id`, 선택 — 본인 스스로에 대한 행위는 NULL) |
+| `action` | `MEMBER_REMOVED/MEMBER_LEFT/PM_TRANSFERRED/OPINION_UPDATED_BY_PM/OPINION_DELETED_BY_PM/PROPOSAL_UPDATED_BY_PM/PROPOSAL_DELETED_BY_PM` |
+| `description` | 사람이 읽을 수 있는 설명 텍스트 |
+| `created_at` | 발생 일시 |
+
+**관계**
+
+- 하나의 팀은 여러 활동 로그를 가질 수 있습니다. (1:N)
+- 하나의 활동 로그는 하나의 행위자(User)를 가지며, 대상 사용자(User)를 가질 수 있습니다(선택). (N:1)
+
 ### ERD 관계 요약
 
 ```text
@@ -1204,11 +1361,15 @@ Users
   │
   ├──< Team_Members >── Teams
   │                       │
-  │                       └──< Proposals
-  │                              ├──< Proposal_Target_Cultures
-  │                              ├──< Culture_Analyses
-  │                              ├──< Opinions >── Users
-  │                              └──< Consensus_Summaries
+  │                       ├──< Proposals
+  │                       │      ├──< Proposal_Target_Cultures
+  │                       │      ├──< Culture_Analyses
+  │                       │      ├──< Opinions >── Users
+  │                       │      └──< Consensus_Summaries
+  │                       │
+  │                       ├──< Team_Messages >── Users (sender)
+  │                       │
+  │                       └──< Activity_Logs >── Users (actor / target)
   │
   └──< Notifications >── Proposals (nullable)
 ```
@@ -1604,6 +1765,12 @@ backend/
 │   │   │           ├── ai/
 │   │   │           ├── dashboard/
 │   │   │           ├── notification/
+│   │   │           ├── friend/
+│   │   │           ├── message/
+│   │   │           ├── teaminvite/
+│   │   │           ├── teammessage/
+│   │   │           ├── realtime/
+│   │   │           ├── activity/
 │   │   │           ├── common/
 │   │   │           └── config/
 │   │   └── resources/
