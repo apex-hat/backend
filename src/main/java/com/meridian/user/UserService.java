@@ -69,6 +69,19 @@ public class UserService {
         return UserSummaryResponse.from(found);
     }
 
+    /** 친구/팀 초대 UI에서 고유 ID(friendCode)로 사용자를 찾을 때 사용. */
+    @Transactional
+    public UserSummaryResponse searchByFriendCode(String authorizationHeader, String friendCode) {
+        getCurrentUserEntity(authorizationHeader);
+        User found = userRepository.findByFriendCode(normalizeFriendCode(friendCode))
+                .orElseThrow(() -> DomainException.notFound("USER_NOT_FOUND", "해당 고유 ID의 사용자를 찾을 수 없습니다."));
+        return UserSummaryResponse.from(found);
+    }
+
+    private String normalizeFriendCode(String friendCode) {
+        return friendCode.trim().toUpperCase().replaceFirst("^#", "");
+    }
+
     private String extractBearerToken(String authorizationHeader) {
         if (!StringUtils.hasText(authorizationHeader)
                 || !authorizationHeader.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {

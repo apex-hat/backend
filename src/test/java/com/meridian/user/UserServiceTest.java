@@ -174,6 +174,33 @@ class UserServiceTest {
                 .isEqualTo("USER_NOT_FOUND");
     }
 
+    @Test
+    void returnsUserSummaryWhenFriendCodeFoundAndNormalizesInput() {
+        when(firebaseTokenVerifier.verify("id-token")).thenReturn(claims(null));
+        when(userRepository.findByFirebaseUid("firebase-uid")).thenReturn(Optional.of(
+                User.builder().id(1L).firebaseUid("firebase-uid").build()));
+        when(userRepository.findByFriendCode("MER-ABCD")).thenReturn(Optional.of(
+                User.builder().id(2L).name("Teammate").email("teammate@example.com").friendCode("MER-ABCD").build()));
+
+        UserSummaryResponse response = userService.searchByFriendCode("Bearer id-token", "  #mer-abcd  ");
+
+        assertThat(response.id()).isEqualTo(2L);
+        assertThat(response.name()).isEqualTo("Teammate");
+    }
+
+    @Test
+    void throwsNotFoundWhenFriendCodeDoesNotMatchAnyUser() {
+        when(firebaseTokenVerifier.verify("id-token")).thenReturn(claims(null));
+        when(userRepository.findByFirebaseUid("firebase-uid")).thenReturn(Optional.of(
+                User.builder().id(1L).firebaseUid("firebase-uid").build()));
+        when(userRepository.findByFriendCode("MER-ZZZZ")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> userService.searchByFriendCode("Bearer id-token", "MER-ZZZZ"))
+                .isInstanceOf(DomainException.class)
+                .extracting(ex -> ((DomainException) ex).getCode())
+                .isEqualTo("USER_NOT_FOUND");
+    }
+
     private FirebaseUserClaims claims(String timeZone) {
         return new FirebaseUserClaims(
                 "firebase-uid",

@@ -260,14 +260,17 @@ JIT 사용자 프로필 동기화는 Firebase ID Token의 claim(email, name 등)
 }
 ```
 
-### 사용자 이메일 검색
+### 사용자 검색 (이메일 / 고유 ID)
 
 ```http
 GET /api/users/search?email={email}
+GET /api/users/search?friendCode={friendCode}
 Authorization: Bearer <Firebase ID Token>
 ```
 
-팀원을 초대하려면 `POST /api/teams/{teamId}/members`에 대상의 `userId`가 필요한데, 초대하는 쪽은 보통 상대의 이메일만 알고 있다. 이 endpoint는 정확히 일치하는 이메일로 가입된 사용자를 찾아 `id`/`name`/`email`만 반환한다(`firebaseUid` 등 민감 정보는 제외). 인증된 사용자만 검색할 수 있으며, 일치하는 사용자가 없으면 `404 USER_NOT_FOUND`를 반환한다.
+`email`과 `friendCode` 중 정확히 하나만 쿼리 파라미터로 전달한다(둘 다 같은 endpoint를 쓰지만, 쿼리 파라미터 이름에 따라 이메일 검색 또는 고유 ID 검색으로 분기된다). 일치하는 사용자를 찾아 `id`/`name`/`email`만 반환한다(`firebaseUid` 등 민감 정보는 제외). 인증된 사용자만 검색할 수 있으며, 일치하는 사용자가 없으면 `404 USER_NOT_FOUND`를 반환한다.
+
+`friendCode` 검색은 팀 초대(아래 [Team Invite API](#team-invite-api))에서 상대를 찾을 때 쓰인다. `#` 접두사가 있어도 없어도 되고, 대소문자를 구분하지 않는다.
 
 예상 응답:
 
@@ -294,6 +297,8 @@ Authorization: Bearer <Firebase ID Token>
 | 팀원 제거    | DELETE | `/api/teams/{teamId}/members/{userId}` | 팀에서 사용자 제거                                |
 
 > 팀원 추가/제거, 팀 정보 수정은 해당 팀의 `role=PM`인 사용자만 수행할 수 있습니다.
+
+> `POST /api/teams/{teamId}/members`는 상대의 동의 없이 즉시 팀원으로 추가한다. 상대의 동의(수락/거절)를 거쳐야 하는 초대 흐름은 아래 [Team Invite API](#team-invite-api)를 사용한다 — 새 팀원을 들일 때는 이쪽을 권장한다.
 
 ---
 
@@ -672,6 +677,7 @@ OPINION_REQUESTED
 DEADLINE_APPROACHING
 CONSENSUS_SUMMARY_COMPLETED
 FRIEND_REQUEST
+TEAM_INVITE
 ```
 
 > `notifications.type`도 위 값을 그대로 사용합니다.
@@ -680,7 +686,7 @@ FRIEND_REQUEST
 
 동일 이벤트에 대한 중복 알림은 방지합니다. `PROPOSAL_CREATED`, `OPINION_REQUESTED`, `CONSENSUS_SUMMARY_COMPLETED`처럼 사용자-제안 조합당 한 번만 발생해야 하는 이벤트는 알림 생성 전 `(user_id, proposal_id, type)` 조합으로 기존 알림 존재 여부를 확인해 중복 생성을 막습니다. `DEADLINE_APPROACHING`처럼 반복 발생이 정상인 이벤트는 대상에서 제외하고 발송 이력(예: 최근 발송 시각)을 기준으로 재발송 여부를 판단합니다.
 
-`FRIEND_REQUEST`는 아래 Friend API에서 친구 요청이 생성될 때 수신자에게 발송됩니다.
+`FRIEND_REQUEST`는 아래 Friend API에서 친구 요청이 생성될 때, `TEAM_INVITE`는 [Team Invite API](#team-invite-api)에서 팀 초대가 생성될 때 수신자에게 발송됩니다.
 
 ## 실시간 이벤트 (WebSocket)
 
@@ -778,6 +784,42 @@ Content-Type: application/json
 
 ---
 
+## Team Invite API
+
+팀 PM이 사용자의 고유 ID(`friendCode`)로 팀 초대를 보내고, 상대가 수락해야 실제로 팀원이 되는 흐름입니다. `POST /api/teams/{teamId}/members`(즉시 추가)와 달리, 수락 전까지는 `team_members`에 아무 영향도 주지 않습니다.
+
+| 기능       | Method | Endpoint                        | 설명                              |
+| -------- | ------ | -------------------------------- | -------------------------------- |
+| 초대 보내기   | POST   | `/api/teams/{teamId}/invites`    | `friendCode`로 초대 전송(PM만)     |
+| 받은 초대 목록 | GET    | `/api/team-invites`               | 나에게 온 PENDING 상태 초대 목록    |
+| 초대 수락/거절 | PATCH  | `/api/team-invites/{inviteId}`    | `accept: true/false`로 응답     |
+
+```http
+POST /api/teams/{teamId}/invites
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "friendCode": "MER-7F3K"
+}
+```
+
+PM이 아니면 `403 TEAM_PM_REQUIRED`, 존재하지 않는 코드면 `404 USER_NOT_FOUND`, 이미 팀원이면 `409 TEAM_MEMBER_ALREADY_EXISTS`, 이미 초대가 진행 중이면 `409 TEAM_INVITE_EXISTS`를 반환합니다. 요청이 성공하면 초대받은 사용자에게 `TEAM_INVITE` 타입 알림이 생성됩니다.
+
+```http
+PATCH /api/team-invites/{inviteId}
+Authorization: Bearer <Firebase ID Token>
+Content-Type: application/json
+
+{
+  "accept": true
+}
+```
+
+초대받은 본인만 응답할 수 있으며(`403 TEAM_INVITE_ACCESS_DENIED`), 이미 처리된 초대에 다시 응답하면 `409 TEAM_INVITE_ALREADY_RESOLVED`를 반환합니다. 수락(`accept: true`) 시 그 순간 실제 `team_members` row가 생성됩니다.
+
+---
+
 # 12. 전체 API Endpoint
 
 | Domain       | Method | Endpoint                               | Description |
@@ -820,6 +862,9 @@ Content-Type: application/json
 | Friend       | GET    | `/api/friends`                         | 친구 목록 조회    |
 | Message      | POST   | `/api/messages`                        | 메시지 전송      |
 | Message      | GET    | `/api/messages/{friendUserId}`         | 특정 친구와의 대화 조회 |
+| Team Invite  | POST   | `/api/teams/{teamId}/invites`          | 팀 초대 보내기(PM만) |
+| Team Invite  | GET    | `/api/team-invites`                    | 받은 팀 초대 목록  |
+| Team Invite  | PATCH  | `/api/team-invites/{inviteId}`         | 팀 초대 수락/거절  |
 
 ---
 
@@ -1141,7 +1186,7 @@ createdAt
 | `id` | 알림 고유 ID (PK) |
 | `user_id` | 수신자 ID (FK → `users.id`) |
 | `proposal_id` | 관련 제안 ID (FK, nullable) |
-| `type` | `PROPOSAL_CREATED/PROPOSAL_UPDATED/OPINION_REQUESTED/DEADLINE_APPROACHING/CONSENSUS_SUMMARY_COMPLETED/FRIEND_REQUEST` |
+| `type` | `PROPOSAL_CREATED/PROPOSAL_UPDATED/OPINION_REQUESTED/DEADLINE_APPROACHING/CONSENSUS_SUMMARY_COMPLETED/FRIEND_REQUEST/TEAM_INVITE` |
 | `title` | 알림 제목 |
 | `content` | 알림 내용 |
 | `is_read` | 읽음 여부 |

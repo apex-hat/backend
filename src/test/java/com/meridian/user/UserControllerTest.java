@@ -89,4 +89,30 @@ class UserControllerTest {
                 .andExpect(jsonPath("$.timeZone").value("Asia/Seoul"))
                 .andExpect(jsonPath("$.location").value("Seoul"));
     }
+
+    @Test
+    void searchByEmailQueryParamRoutesToEmailSearch() throws Exception {
+        UserSummaryResponse response = new UserSummaryResponse(2L, "Teammate", "teammate@example.com");
+        when(userService.searchByEmail("Bearer id-token", "teammate@example.com")).thenReturn(response);
+
+        mockMvc.perform(get("/api/users/search")
+                        .param("email", "teammate@example.com")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer id-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(2))
+                .andExpect(jsonPath("$.name").value("Teammate"));
+    }
+
+    @Test
+    void searchByFriendCodeQueryParamRoutesToFriendCodeSearch() throws Exception {
+        UserSummaryResponse response = new UserSummaryResponse(3L, "Friend", "friend@example.com");
+        when(userService.searchByFriendCode("Bearer id-token", "MER-ABCD")).thenReturn(response);
+
+        mockMvc.perform(get("/api/users/search")
+                        .param("friendCode", "MER-ABCD")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer id-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(3))
+                .andExpect(jsonPath("$.name").value("Friend"));
+    }
 }
